@@ -1,0 +1,9 @@
+bin
+dist-bld
+sample-env
+.readme.md.html
+st80vm.jardesc
+st80vm.manifest
+src/dev/hawala/st80vm/Testbed.java
+src/dev/hawala/st80vm/TestInterpreter.java
+src/dev/hawala/st80vm/pending.txt
