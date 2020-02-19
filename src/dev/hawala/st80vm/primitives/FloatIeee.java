@@ -286,4 +286,28 @@ public class FloatIeee { // Bluebook claims that IEEE single-precision (32-bit) 
 		}
 	};
 	
+	public static final Primitive primitiveFloatSinus = () -> { w("primitiveFloatSinus");
+		float receiver = popFloat(true);
+		if (!Interpreter.success()) {
+			unPop(1);
+			return false;
+		}
+		float sinus = (float) Math.sin(receiver);
+		logf("\nsin( %f ) => %f", receiver, sinus);
+		pushNewFloat(sinus);
+		return true;
+	};
+	
+	public static final Primitive primitiveFloatCosinus = () -> { w("primitiveFloatCosinus");
+		float receiver = popFloat(true);
+		if (!Interpreter.success()) {
+			unPop(1);
+			return false;
+		}
+		float cosinus = (float) Math.cos(receiver);
+		logf("\ncos( %f ) => %f", receiver, cosinus);
+		pushNewFloat(cosinus);
+		return true;
+	};
+	
 }

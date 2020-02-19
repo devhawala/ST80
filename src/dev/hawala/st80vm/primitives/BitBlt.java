@@ -26,7 +26,6 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 package dev.hawala.st80vm.primitives;
 
-import static dev.hawala.st80vm.interpreter.Interpreter.popInteger;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.popStack;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.push;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.stackTop;
@@ -40,7 +39,6 @@ import dev.hawala.st80vm.memory.OTEntry;
 import dev.hawala.st80vm.memory.Well;
 import dev.hawala.st80vm.ui.iDisplayPane;
 
-// copyBits: closely based on Bluebook pp. 355 "Simulation of BitBlt"
 /**
  * Implementation of primitives for the class BitBlt and its subclass CharacterScanner.
  * <p>These are:
@@ -48,7 +46,8 @@ import dev.hawala.st80vm.ui.iDisplayPane;
  * <ul>
  * <li>{@code BitBlt.copyBits} (required, closely based on Bluebook pp. 355 "Simulation of BitBlt", with bugfixes)</li>
  * <li>{@code BitBlt.drawLoopX} (optional, based on the default implementation in file Smalltalk-80.sources)</li>
- * <li>{@code CharacterScanner.scanCharacters} (optional, based on the default implementation in file Smalltalk-80.sources)</li>
+ * <li>{@code BitBlt.drawCircle} (optional, DV6 only, based on the default implementation in file Smalltalk-80.sources)</li>
+ * <li>{@code CharacterScanner.scanCharacters} (optional, based on the default implementation in file ST80-DV6.sources)</li>
  * </ul>
  * <p>(the optional primitives are implemented to speed up the general and UI performance of the system)</p>
  * <p>
@@ -63,6 +62,66 @@ public class BitBlt {
 	
 	private static void w(String name) { if (Config.LOG_PRIMITIVES) { System.out.printf("\n-> BitBlt." + name + "\n"); } }
 	private static void logf(String format, Object... args) { if (Config.TRACE_BITBLT) { System.out.printf(format, args); } }
+	
+	/*
+	 * generic utilities for number-pointer <-> value conversion
+	 * (at least more general than integerValueOf/integerObjectOf, allowing to handle 32 bit integers and floats)
+	 */
+	
+	private static int pointer2int(int integerPointer) {
+		if (Memory.isIntegerObject(integerPointer)) {
+			return Memory.integerValueOf(integerPointer);
+		}
+		int clsPointer = Memory.fetchClassOf(integerPointer);
+		
+		if (clsPointer == Well.known().ClassFloatPointer) {
+			int floatRepr = (Memory.fetchWord(0, integerPointer) << 16) | Memory.fetchWord(1, integerPointer);
+			float value = Float.intBitsToFloat(floatRepr);
+			return (int)value;
+		}
+		
+		int len = Memory.fetchByteLengthOf(integerPointer);
+		if ( (clsPointer != Well.known().ClassLargePositivelntegerPointer && clsPointer != Well.known().ClassLargeNegativeIntegerPointer) || len > 4) {
+			Interpreter.primitiveFail();
+			return 0x7FFFFFFF; // we must return something, but what? (last Integer => out-of-bounds when accessing anything in virtual memory!)
+		}
+		int value = 0;
+		if (len > 0) { value = Memory.fetchByte(0, integerPointer); }
+		if (len > 1) { value |= Memory.fetchByte(1, integerPointer) << 8; }
+		if (len > 2) { value |= Memory.fetchByte(2, integerPointer) << 16; }
+		if (len > 3) { value |= Memory.fetchByte(3, integerPointer) << 24; }
+		if (clsPointer == Well.known().ClassLargePositivelntegerPointer) {
+			return value;
+		} else if (value < 0) {
+			return value;
+		} else {
+			return -value;
+		}
+	}
+	
+	private static int int2pointer(int integerValue) {
+		if (integerValue < 0xFFFFL && Memory.isIntegerValue((int)integerValue)) {
+			return Memory.integerObjectOf((int)integerValue);
+		}
+		
+		final int clsPtr;
+		if (integerValue >= 0) {
+			clsPtr = Well.known().ClassLargePositivelntegerPointer;
+		} else {
+			clsPtr = Well.known().ClassLargeNegativeIntegerPointer;
+			logf("\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ int2pointer(): creating LargeNegativeIntegerPointer for: %d\n", integerValue);
+		}
+		integerValue = Math.abs(integerValue); // this assumes that negatives are stored as positives
+		
+		int bytes = (integerValue > 0x00FFFFFFL) ? 4 :(integerValue > 0x0000FFFFL) ? 3 : 2;
+		
+		int newLargeInteger = Memory.instantiateClassWithBytes(clsPtr, bytes);
+		Memory.storeByte(0, newLargeInteger, (int)(integerValue & 0xFF));
+		Memory.storeByte(1, newLargeInteger, (int)((integerValue >> 8) & 0xFF));
+		if (bytes > 2) { Memory.storeByte(2, newLargeInteger, (int)((integerValue >> 16) & 0xFF)); }
+		if (bytes > 3) { Memory.storeByte(3, newLargeInteger, (int)((integerValue >> 24) & 0xFF)); }
+		return newLargeInteger;
+	}
 	
 	/*
 	 * ************************************************************ display interface
@@ -90,8 +149,8 @@ public class BitBlt {
 		int bitsPointer = display.fetchPointerAt(Well.known().FormBitsIndex);
 		OTEntry bits = Memory.ot(bitsPointer);
 		
-		displayWidth = Memory.integerValueOf(display.fetchPointerAt(Well.known().FormWidthIndex));
-		displayHeight = Memory.integerValueOf(display.fetchPointerAt(Well.known().FormHeightIndex));
+		displayWidth = pointer2int(display.fetchPointerAt(Well.known().FormWidthIndex));
+		displayHeight = pointer2int(display.fetchPointerAt(Well.known().FormHeightIndex));
 		displayRaster = ((displayWidth - 1) / 16) + 1;
 
 		logf("--\n--registerDisplayScreen():\n");
@@ -124,7 +183,7 @@ public class BitBlt {
 			return;
 		}
 		
-		// copy changed scan lines to the dispolay screen
+		// copy changed scan lines to the display screen
 		displayPane.copyDisplayContent(
 				Memory.getHeapMem(),
 				Memory.ot(display.fetchPointerAt(Well.known().FormBitsIndex)).address() + 2, // cannot be cached, as address may change due to memory compaction!
@@ -257,20 +316,20 @@ public class BitBlt {
 		sourceForm = (oop == nilPointer) ? null : Memory.ot(oop);
 		oop = bitBlt.fetchPointerAt(BitBlt_HalftoneForm_Index);
 		halftoneForm = (oop == nilPointer) ? null : Memory.ot(oop);
-		combinationRule = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_CombinationRule_Index));
-		destX = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_DestX_Index));
-		destY = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_DestY_Index));
-		width = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_Width_Index));
-		height = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_Height_Index));
-		sourceX = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_SourceX_Index));
-		sourceY = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_SourceY_Index));
-		clipX = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_ClipX_Index));
-		clipY = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_ClipY_Index));
-		clipWidth = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_ClipWidth_Index));
-		clipHeight = Memory.integerValueOf(bitBlt.fetchPointerAt(BitBlt_ClipHeight_Index));
+		combinationRule = pointer2int(bitBlt.fetchPointerAt(BitBlt_CombinationRule_Index));
+		destX = pointer2int(bitBlt.fetchPointerAt(BitBlt_DestX_Index));
+		destY = pointer2int(bitBlt.fetchPointerAt(BitBlt_DestY_Index));
+		width = pointer2int(bitBlt.fetchPointerAt(BitBlt_Width_Index));
+		height = pointer2int(bitBlt.fetchPointerAt(BitBlt_Height_Index));
+		sourceX = pointer2int(bitBlt.fetchPointerAt(BitBlt_SourceX_Index));
+		sourceY = pointer2int(bitBlt.fetchPointerAt(BitBlt_SourceY_Index));
+		clipX = pointer2int(bitBlt.fetchPointerAt(BitBlt_ClipX_Index));
+		clipY = pointer2int(bitBlt.fetchPointerAt(BitBlt_ClipY_Index));
+		clipWidth = pointer2int(bitBlt.fetchPointerAt(BitBlt_ClipWidth_Index));
+		clipHeight = pointer2int(bitBlt.fetchPointerAt(BitBlt_ClipHeight_Index));
 		
-		sourceForm_width = (sourceForm != null) ? Memory.integerValueOf(sourceForm.fetchPointerAt(Well.known().FormWidthIndex)) : 0x7FFFFFF0;
-		sourceForm_height = (sourceForm != null) ? Memory.integerValueOf(sourceForm.fetchPointerAt(Well.known().FormHeightIndex)) : 0x7FFFFFF0;
+		sourceForm_width = (sourceForm != null) ? pointer2int(sourceForm.fetchPointerAt(Well.known().FormWidthIndex)) : 0x7FFFFFF0;
+		sourceForm_height = (sourceForm != null) ? pointer2int(sourceForm.fetchPointerAt(Well.known().FormHeightIndex)) : 0x7FFFFFF0;
 
 		Interpreter.unPop(1); // the primitive will ultimately return the receiver (self)
 		
@@ -316,8 +375,8 @@ public class BitBlt {
 			logf("-> clip area outside destForm (clipY+clipHeight <= 0)\n");
 			return;
 		}
-		int destWidth = Memory.integerValueOf(destForm.fetchPointerAt(Well.known().FormWidthIndex));
-		int destHeight = Memory.integerValueOf(destForm.fetchPointerAt(Well.known().FormHeightIndex));
+		int destWidth = pointer2int(destForm.fetchPointerAt(Well.known().FormWidthIndex));
+		int destHeight = pointer2int(destForm.fetchPointerAt(Well.known().FormHeightIndex));
 		if (clipX >= destWidth) {
 			w = -1;
 			h = -1;
@@ -392,9 +451,9 @@ public class BitBlt {
 	private static void computeMasks() {
 		// calculate skew and edge masks
 		destBits = Memory.ot(destForm.fetchPointerAt(Well.known().FormBitsIndex));
-		destRaster = ((Memory.integerValueOf(destForm.fetchPointerAt(Well.known().FormWidthIndex)) - 1) / 16) + 1;
+		destRaster = ((pointer2int(destForm.fetchPointerAt(Well.known().FormWidthIndex)) - 1) / 16) + 1;
 		sourceBits = (sourceForm != null) ? Memory.ot(sourceForm.fetchPointerAt(Well.known().FormBitsIndex)) : null;
-		sourceRaster = (sourceForm != null) ? ((Memory.integerValueOf(sourceForm.fetchPointerAt(Well.known().FormWidthIndex)) - 1) / 16) + 1 : 0;
+		sourceRaster = (sourceForm != null) ? ((pointer2int(sourceForm.fetchPointerAt(Well.known().FormWidthIndex)) - 1) / 16) + 1 : 0;
 		halftoneBits = (halftoneForm != null) ? Memory.ot(halftoneForm.fetchPointerAt(Well.known().FormBitsIndex)) : null;
 		skew = (sx - dx) & 0x000F; // how many bits source gets skewed to right
 		startBits = 16 - (dx & 0x000F); // how many bits in first word
@@ -509,7 +568,7 @@ public class BitBlt {
 			logf("  - h................: %d\n", h);
 		}
 		
-		Combiner combiner = rules[combinationRule & 0x000F];
+		Combiner combiner = rules[Math.max(0, Math.min(combinationRule, 15))];
 		boolean havingHalftone = (halftoneForm != null);
 		boolean havingSource = (sourceForm != null);
 		int mask1_inverted = mask1 ^ 0xFFFF;
@@ -575,9 +634,9 @@ public class BitBlt {
 		// a potential, P.  When P's sign changes, it is time to move in the 
 		// minor direction as well."
 		
-		int yDelta = Interpreter.popInteger();
-		int xDelta = Interpreter.popInteger();
-		int bitBltOop = Interpreter.popStack();
+		int yDelta = pointer2int(popStack());
+		int xDelta = pointer2int(popStack());
+		int bitBltOop = popStack();
 		OTEntry bitBlt = Memory.ot(bitBltOop); // we assume the primitive is really attached only to a BitBlt message
 		
 		// leave the receiver (a BitBlt instance) on the stack:
@@ -628,9 +687,80 @@ public class BitBlt {
 	}
 	
 	private static void incrField(OTEntry obj, int fieldIdx, int by) {
-		int tmp = Memory.integerValueOf(obj.fetchPointerAt(fieldIdx));
-		obj.storePointerAt(fieldIdx, Memory.integerObjectOf(tmp + by));
+		int tmp = pointer2int(obj.fetchPointerAt(fieldIdx));
+		obj.storePointerAt(fieldIdx, int2pointer(tmp + by));
 	}
+	
+	/*
+	 * access to relevant instance variables of a CharacterScanner and (inherited) a BitBlt
+	 * (for drawCircle and scanCharacters)
+	 */
+	
+	private static OTEntry currSelf = null; // self of the currently executing drawCircle or scanCharacters method
+	
+	private static int lastIndex() { return pointer2int(currSelf.fetchPointerAt(CharScan_LastIndex)); }
+	private static int lastIndex(int value) { currSelf.storePointerAt(CharScan_LastIndex, int2pointer(value)); return value; }
+	
+	private static int sourceX() { return pointer2int(currSelf.fetchPointerAt(BitBlt_SourceX_Index)); }
+	private static int sourceX(int value) { currSelf.storePointerAt(BitBlt_SourceX_Index, int2pointer(value)); return value; }
+	
+	private static int width() { return pointer2int(currSelf.fetchPointerAt(BitBlt_Width_Index)); }
+	private static int width(int value) { currSelf.storePointerAt(BitBlt_Width_Index, int2pointer(value)); return value; }
+	
+	private static int destX() { return pointer2int(currSelf.fetchPointerAt(BitBlt_DestX_Index)); }
+	private static int destX(int value) { currSelf.storePointerAt(BitBlt_DestX_Index, int2pointer(value)); return value; }
+	
+	private static int destY() { return pointer2int(currSelf.fetchPointerAt(BitBlt_DestY_Index)); }
+	private static int destY(int value) { currSelf.storePointerAt(BitBlt_DestY_Index, int2pointer(value)); return value; }
+	
+	/*
+	 * processing of BitBlt.drawCircle (DV6)
+	 */
+	
+	// "Draw a circle with given radius centered at destX@destY, using a modified Bresenham line algorithm."
+	public static final Primitive primitiveDrawCircle = () -> { w("primitiveCircle");
+		int radius = pointer2int(popStack());
+		int selfPointer = popStack();
+		
+		currSelf = Memory.ot(selfPointer);
+		
+		// leave the receiver (a BitBlt instance) on the stack:
+		// -> it will the receiver for the copyBits messages (which will also leave it on the stack)
+		// -> it will be returned by this primitive
+		Interpreter.unPop(1);
+		
+		int centerX = destX();
+		int centerY = destY();
+		int x = 0;
+		int y = - Math.abs(radius);
+		int p = y;
+		
+		while(true) {
+			destX(centerX + x); destY(centerY + y); primitiveCopyBits.execute();
+			destX(centerX - x); primitiveCopyBits.execute();
+			destY(centerY - y); primitiveCopyBits.execute();
+			destX(centerX + x); primitiveCopyBits.execute();
+			destX(centerX + y); destY(centerY + x); primitiveCopyBits.execute();
+			destX(centerX - y); primitiveCopyBits.execute();
+			destY(centerY - x); primitiveCopyBits.execute();
+			destX(centerX + y); primitiveCopyBits.execute();
+			
+			if (p > 0) {
+				y += 1;
+				p = p + y + y + 1;
+			}
+			x += 1;
+			p = p + x + x + 1;
+			
+			if ((x + y) > 0) { break; }
+		}
+		
+		destX(centerX);
+		destY(centerY);
+		return true;
+	};
+	
+	
 	
 	/*
 	 * ************************************************************ class CharacterScanner (subclass of BitBlt)
@@ -662,44 +792,26 @@ public class BitBlt {
 	private static final int CrossedX = 258;
 	
 	/*
-	 * access to relevant instance variables of a CharacterScanner
-	 */
-	
-	private static OTEntry scanCharsSelf = null; // self of the currently executing scanCharacters method
-	
-	private static int lastIndex() { return Memory.integerValueOf(scanCharsSelf.fetchPointerAt(CharScan_LastIndex)); }
-	private static int lastIndex(int value) { scanCharsSelf.storePointerAt(CharScan_LastIndex, Memory.integerObjectOf(value)); return value; }
-	
-	private static int sourceX() { return Memory.integerValueOf(scanCharsSelf.fetchPointerAt(BitBlt_SourceX_Index)); }
-	private static int sourceX(int value) { scanCharsSelf.storePointerAt(BitBlt_SourceX_Index, Memory.integerObjectOf(value)); return value; }
-	
-	private static int width() { return Memory.integerValueOf(scanCharsSelf.fetchPointerAt(BitBlt_Width_Index)); }
-	private static int width(int value) { scanCharsSelf.storePointerAt(BitBlt_Width_Index, Memory.integerObjectOf(value)); return value; }
-	
-	private static int destX() { return Memory.integerValueOf(scanCharsSelf.fetchPointerAt(BitBlt_DestX_Index)); }
-	private static int destX(int value) { scanCharsSelf.storePointerAt(BitBlt_DestX_Index, Memory.integerObjectOf(value)); return value; }
-	
-	/*
 	 * implementation of CharacterScanner.scanCharacters
 	 */
 	
 	public static final Primitive primitiveScanCharacters = () -> {
 		int displayPointer = popStack();
 		int stopsPointer = popStack();
-		int rightX = popInteger();
+		int rightX = pointer2int(popStack());
 		int sourceStringPointer = popStack();
-		int stopIndex = popInteger();
-		int startIndex = popInteger();
+		int stopIndex = pointer2int(popStack());
+		int startIndex = pointer2int(popStack());
 		int selfPointer = stackTop(); // leave self on the stack for CopyBits
 		
-		scanCharsSelf = Memory.ot(selfPointer);
+		currSelf = Memory.ot(selfPointer);
 		
 		OTEntry sourceString = Memory.ot(sourceStringPointer);
 		OTEntry stops = Memory.ot(stopsPointer);
 		boolean display = (displayPointer == Well.known().TruePointer);
 		
-		OTEntry stopConditions = Memory.ot(scanCharsSelf.fetchPointerAt(CharScan_StopConditions));
-		OTEntry xTable = Memory.ot(scanCharsSelf.fetchPointerAt(CharScan_XTable));
+		OTEntry stopConditions = Memory.ot(currSelf.fetchPointerAt(CharScan_StopConditions));
+		OTEntry xTable = Memory.ot(currSelf.fetchPointerAt(CharScan_XTable));
 		
 		lastIndex(startIndex);
 		while(lastIndex() <= stopIndex) {
@@ -709,8 +821,8 @@ public class BitBlt {
 				push(stops.fetchPointerAt(ascii));
 				return success();
 			}
-			sourceX(Memory.integerValueOf(xTable.fetchPointerAt(ascii)));
-			width(Memory.integerValueOf(xTable.fetchPointerAt(ascii + 1)) - sourceX());
+			sourceX(pointer2int(xTable.fetchPointerAt(ascii)));
+			width(pointer2int(xTable.fetchPointerAt(ascii + 1)) - sourceX());
 			int nextDestX = destX() + width();
 			if (nextDestX > rightX) {
 				popStack(); // drop self

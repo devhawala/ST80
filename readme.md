@@ -3,18 +3,32 @@
 ST80 is a virtual machine for Smalltalk-80 as specified in the "Bluebook" (Smalltalk-80:
 the Language and its Implementation, see Bibliography) implemented in Java 8.
 
-The ST80 program allows to run the Xerox Smalltalk-80 Version 2 image found at the archive.org website
-(see [Smalltalk-80](https://archive.org/details/smalltalk-80)). The archive found there seems
-to be the content of an original Xerox distribution tape for Smalltalk-80, at least regarding the most
-important files like the virtual memory image itself, the Smalltalk-80 source code and some trace files
-indicating which instructions are executed when the image is restarted.
+The ST80 program allows to run 2 historical version of Smalltalk-80:
 
-As the appearance dates of the Smalltalk-80 book series and the source code are all 1983 (the image file is from 1985,
+- the Smalltalk-80 Version 2 image of 1983 found at the archive.org website
+  (see [Smalltalk-80](https://archive.org/details/smalltalk-80)). The archive found there seems
+  to be the content of an original Xerox distribution tape for Smalltalk-80, at least regarding the most
+  important files like the virtual memory image itself, the Smalltalk-80 source code and some trace files
+  indicating which instructions are executed when the image is restarted.
+
+- the Smalltalk-80 DV6 distribution of 1987 found at Bitsavers
+  ([1186_Smalltalk-80_DV6_Dec87](http://bitsavers.org/bits/Xerox/1186/1186_Smalltalk-80_DV6_Dec87.zip)).
+  This is Version 6 of Smalltalk-80 for the Xerox 1186 (6085) Daybreak workstations (thus the _DV6_ version). The floppy
+  images at Bitsavers are slightly corrupted as each first track is lost, giving a hard time to read the floppies with
+  a modified version of the Dwarf emulator for restoring the content.    
+  The Smalltalk-80 DV6 image uses a modified encoding scheme for object pointers called _Stretch_, which differs from
+  the Bluebook specification for having more true objects in the live system (48k objects instead of 32k) at the expense of
+  the number of SmallIntegers (16k instead of 32k).
+
+As the appearance dates of the Smalltalk-80 book series and the source code of Version 2 are all 1983 (the image file is from 1985,
 but this may be due to a Unix copy operation), the idea and challenge to "resurrect" this vintage
 Smalltalk version emerged, in the pure interest of preserving an important piece of computer history as usable and
-experienceable item, instead of a "look at it but don't touch" museum exhibit in a glas case.    
-This vintage Smalltalk environment cannot compete with any serious modern - commercial or open source - Smalltalk
-implementation, which swim rings around the original 16-bit Smalltalk-80 system provided in the mentioned tape,
+experienceable item instead of a "look at it but don't touch" museum exhibit in a glas case.    
+Extending the first implementation afterwards to also support the _Stretch_ memory model for DV6 was a "natural"
+evolution path.
+
+Both vintage Smalltalk environments cannot compete with any serious modern - commercial or open source - Smalltalk
+implementation, which swim rings around the original 16-bit Smalltalk-80 systems,
 be it in terms of execution speed, memory (heap size, max. number of objects), technical capabilities (networking,
 version management, ...), user interface (color, frameworks, ...) etc.
 
@@ -23,9 +37,13 @@ used in the Bluebook for specifying the virtual machine, with some bugfixes. The
 which could be implemented without the hardware restrictions for the available RAM that were common when 
 Smalltalk-80 was specified, allowing for a much simpler design of the at most 1 MWord (yes: 16 segments of 65536 
 16-bit-words or 2 MBytes) heap memory and the 16 bit object pointers. Besides this, all required and some
-optional primitives are implemented by ST80.
+optional primitives are implemented by ST80.   
+Subsequent changes to support the _Stretch_ mode were mostly localized to the object memory implementation, however
+with some minimal but important changes in the interpreter due to the reduced value range for SmallIntegers.
 
-As the available Smalltalk image expects to run on an Alto machine for all file operations, an emulation for an
+Both Smalltalk-80 versions were intended to run on a specific computer environment:
+
+- the available Version 2 Smalltalk image expects to run on an Alto machine for all disk I/O operations. So an emulation for an
 Alto harddisk was added to ST80, implementing the "vendor-specific" primitives for the Alto. This emulation uses
 the same disk image format used by common Alto emulators ([ContrAlto](https://github.com/livingcomputermuseum/ContrAlto)
 or [Salto](http://bitsavers.org/bits/Xerox/Alto/simulator/salto/)). The disk image contains a single disk Alto file system
@@ -33,8 +51,13 @@ which is accessed by the relevant Smalltalk classes through simulated low-level 
 ST80 also includes an utility for creating, loading and writing Alto disk images, list the disk content
 and manipulating the disk like adding/renaming/deleting files.
 
-In a nutshell, ST80 should allow to work "as expected" with the original image file for this vintage Smalltalk-80
-Version 2 environment. The following screenshot shows the ST80 application window running the version 2 image with
+- the DV6 Smalltalk image uses the file system provided by XDE/Tajo, the Xerox Development Environment, running on an 1186
+workstation. ST80 provides a simple emulation of the XDE environment which maps the root volume of the Tajo filesystem to
+a base directory of the OS where ST80 runs, providing the basic facilities like search path and case insensitive filenames.
+Most of the larger set of "vendor-specific" primitives used by the DV6 version of Smalltalk-80 are implemented by ST80.
+
+In a nutshell, ST80 should allow to work "as expected" with the original images for the vintage Smalltalk-80 Version 2
+and DV6 environments. The following screenshot shows the ST80 application window running the version 2 image with
 a companion Alto disk where the source code for the method shown in the browser (notice the variable name and comment) and
 the _SmalltalkBalloon_ picture were loaded from:
 
@@ -42,8 +65,20 @@ the _SmalltalkBalloon_ picture were loaded from:
 
 ### Data files for running ST80
 
-ST80 uses a _data file set_ of up to 3 files grouped by the common base _filename_ for a single Smalltalk
-environment instance:
+In addition to the memory image, a Smalltalk-80 system uses a number of files in an external file system. These are the sources
+file holding the source code for all classes in the image, the changes file logging all changes (like class/method modifications,
+_doit_ evaluations) for recovery after a system crash and some further data files like externalized ("filed-out") Smalltalk code,
+bitmaps etc. 
+
+In the original setup, these files reside in the file system of the operating system where the Smalltalk interpreter was started.
+ST80 simulates these operating system environments (Alto resp. XDE/Tajo) to some (rather minimal) extent to allow the Smalltalk
+image to work with files in the expected way. The following sections describe how the expected file systems are mapped to the
+"real" OS where ST80 runs.
+
+#### Alto environment for Smalltalk-80 Version 2
+
+ST80 uses a _data file set_ of up to 3 files grouped by the common base _filename_ for a single Smalltalk-80
+Version 2 environment instance:
 
 - _filename_`.im` is the required Smalltalk image file
 
@@ -65,8 +100,8 @@ environment is to create a snapshot of the environment through the background mi
 _Save_ command or the _Quit_ command with the _Save, then quit_ option.
 
 The new snapshot replaces the Smalltalk image file used to start ST80. Before overwriting with the new snapshot, ST80
-backups the current snapshot file to a compressed file with same name and the file creation timestamp appended. For example
-the first backup for the original `VirtualImage.im` will be named `VirtualImage.im-1985.11.06_12.01.05.000`,
+backups the current snapshot file to a file copy with same name and the file creation timestamp appended. For example
+the first backup for the original `VirtualImage.im` will be named `VirtualImage.im;1985.11.06_12.01.05.000`,
 while the new snapshot will again be named `VirtualImage.im`.
 
 **Complete data file set with Alto disk image**
@@ -115,15 +150,163 @@ is simply confirmed) while a different snapshot name was last used (e.g. _works_
 virtual machine about the new name, but will still continue to use the current change file instead of switching to
 the new one.    
 For this reason and as disk space is no longer a restriction these days, it could be a good practice to stick with the
-default snapshot name and copy the whole data file set into a new directory (preserving the default name) if a new
-snapshot branch is necessary.
+default snapshot name and copy the whole data file set into a new directory (preserving the default snapshot name) when
+a new snapshot branch is necessary.
 
-### A tour through the ST80 sample environment
+#### Tajo environment for Smalltalk-80 DV6
+
+The Smalltalk-80 DV6 image cannot be used without an external file system. Although the disk connection for source
+files preset in the image can be released (by setting `Disk`to `nil`), it will not be possible to create snapshots
+of the running Smalltalk system, as the file system is interfaced directly by Smalltalk for this. So ST80 supports
+a file system for a Smalltalk-80 DV6 image by default (if the files besides the image seem acceptable, see _Invoking ST80_
+and below).
+
+The emulated Tajo/XDE file system operates directly on the local OS file system where ST80 is started and maps
+a given base directory as volume `<User>` of the Tajo environment. The directory structure and files under the
+base directory are made visible under this volume root with the same directory structure and with case-insensitive
+names. There is however one major exception: files having a semicolon in the filename are not mapped into the
+Tajo file system, allowing to hide files used or created by ST80 from the Smalltalk environment. These files are:
+
+- the search path definition file
+
+- Smalltalk image backup files, which have the original filename with a semicolon and the timestamp appended
+
+A search path definition file is named `;searchpath.txt` and contains - one in a line - the full path of each
+entry (a Tajo directory) to be in the search path in lookup order. The entries in the search path must be spelled in the
+Tajo syntax (where `>` is the directory separator) and start with the volume (either `<User>` or `<>`).     
+For example, if the OS base directory `smalltalk-root` contains the directories `Smalltalk` and `Goodies`,
+the following `;searchpath.txt` may be used:
+
+```
+<>Smalltalk
+<User>Goodies
+<whatever>docs
+<User>sources
+<user>
+```
+
+So looking up a file will first search in `<User>Smalltalk` (effectively `smalltalk-root/Smalltalk`), then
+in `<User>Goodies` (which is `smalltalk-root/Goodies`) and finally in `<User>` (aka `smalltalk-root`).
+The following entries of the file are ignored by the emulation: `<whatever>docs` (only the volume `<User>` is allowed) and
+`<User>sources` (no corresponding real directory).
+
+The first entry in the search path has a special importance, as it is there that new files are created if
+only the filename is given or used (e.g. when filing out a Smalltalk item). 
+
+The "search path tool" from the Smalltalk background menu allows to manipulate the active search path. Any file
+operations in Smalltalk on the Tajo file system are synchronous, i.e. the file manipulation occurs directly
+in the OS file system, no matter if it is a file I/O (especially a write), a rename or a delete.
+
+The search path definition file is located in the OS base directory for the Tajo volume, in fact it defines the containing
+directory to be the volume root:
+
+- when ST80 is started for an Smalltalk image file, it first checks for a file with the extension `.sources` or
+`.changes` besides it.
+
+- if no such file is found, no Tajo file system will be emulated and the image is run stand alone without file system
+  (with known restrictions: no snapshots)
+
+- if such a file is present, the file `;searchpath.txt` is looked for in the image's directory up to 3 directory
+  levels upwards
+  
+- if a `;searchpath.txt` is found, the directory containing this file is used as root volume with the search
+  path defined in that file.
+  
+- if no `;searchpath.txt` is found, the directory containing the image is used as root volume and a search
+  path consisting only of `<User>` is initially used.
+
+The Tajo file system emulation caches the names and paths of all files in the volume at startup of ST80. This means that
+files added or renamed later below the volume root directory at OS level will not be visible. Best is not to touch the
+files and directories below the root directory as long as ST80 is running and using it.
+
+Most filing operations from inside the Smalltalk environment are supported, however renaming or deleting a directory
+is only possible if it is empty.
+
+Before a new snapshot of the Smalltalk environment is created, the Tajo file with the snapshot name (as given in the prompter
+with extension `.im`) is looked up in the search path by the Smalltalk system, creating a new snapshot file in the
+first search path entry if the snapshot file is not found. The memory image is then written into the real OS file 
+corresponding to the Tajo file, overwriting any content present. Before overwriting with the new snapshot, ST80 first
+backups the current snapshot file to a file with same name and the file creation timestamp appended. For example
+the backup for a `snapshot.im` file may be named `snapshot.im;2020.02.17_20.17.12.385`,
+while the snapshot will again be named `snapshot.im`. The backup files will be located besides the image
+file.
+
+Remarks:
+
+- when creating an image snapshot, the DV6 version has the same asymetric behavior as version 2: changing the name
+  proposed in the prompter will create the image file with the new name and switch to a changes file matching this new
+  name. However keeping the proposed default name ("snapshot") if a different name was used before will only change the
+  name of the image file but Smalltalk will still continue to use the previous changes file with the old name.    
+  For this reason and as disk space is no longer a restriction these days, it could be a good practice to stick with the
+  default snapshot name and copy the whole root directory for the Tajo volume to a new location (preserving the default
+  snapshot name) when a new snapshot branch is necessary.
+
+- there is a bug in Smalltalk related to the _search path tool_ found in the desktop background menu: the Smalltalk
+  system refreshes the directory lists in open _search path tool_ viewers in some situations but fails in doing so,
+  opening a "Message not understood: update" notifier.    
+  This is annoying (but not a real problem) during interactions, but a real show stopper if it happens when restarting
+  an image snapshot that had the search path tool opened: as Smalltalk minimizes the display height to reduce heap space
+  before writing the snapshot, the "Message not understood: update" notifier holds the execution of the restart sequence
+  before the screen size is restored, so the screen stays in the minimal size, preventing any meaningful interaction with
+  the system and thus making it useless.    
+  Therefore:
+  
+  -- **never** snapshot the Smalltalk environment while the _search path tool_ opened (not even collapsed)
+  
+  -- a good practice is to close the _search path tool_ directly after using it (which is seldom necessary anyway)
+
+### A tour through the ST80 sample environments
 
 Besides the ST80 source code and the executable jar `st80vm.jar`, the Gitub project also contains the archive
-`sample-env.zip` containing a ready to run Smalltalk-80 Version 2 sample environment.
+`sample-env.zip` containing a ready to run Smalltalk-80 sample environment for each of Version 2 and DV6.
 
 After unpacking the archive, the new subdirectory `sample-env` contains the following items:
+
+- the subdirectory `1186-dv6` with the files for a sample Smalltalk-80 DV6 environment
+
+- the subdirectory `alto-v2` with the files for a sample Smalltalk-80 Version 2 environment
+  
+- a set of scripts to simplify running ST80:
+
+  -- `st80.cmd` resp. `st80.sh` to run ST80 and specify the environment and options on the command line
+  
+  -- `st80_dv6.cmd` resp. `st80_dv6.sh` to directly run the DV6 sample environment including all options,
+     specifically for setting the western european time zone
+  
+  -- `st80_v2.cmd` resp. `st80_v2.sh` to directly run the Version 2 sample environment including all options,
+     specifically for adjusting the GMT time so Smalltalk shows western european time
+  
+  -- `st80vm.jar` (the executable jar for ST80)
+
+#### Sample Smalltalk-80 DV6 environment
+
+The directory `1186-dv6` contains the items for an emulated Tajo volume for the Smalltalk-80 DV6 sample
+environment with the following items:
+
+- the subdirectory `Smalltalk` with the files from the original floppy set:
+
+  -- `snapshhot.im` (renamed from the image file `ST80-DV6.im`)
+  
+  -- `ST80-DV6.changes` and `ST80-DV6.initialChanges`
+  
+  -- `ST80-DV6.sources`
+  
+- the subdirectory `Smalltalk/Goodies` with the files from the "Goodies" floppy, mainly pictures (`*.form`),
+  samples Smalltalk classes and code (`*.st`, `*.workspace`)
+  
+- the search path definition file `;searchpath.txt` for the Tajo volume, defining the following search path:    
+  `<>Smalltalk`    
+  `<>Smalltalk>Goodies`
+
+For a quick start with Smalltalk-80 DV6, enter the `sample-env` directory and enter `st80_dv6` resp.
+`./st80_dv6.sh` in a command shell; the following window should open (here on Windows):
+
+![ST80 in sample-env running the DV6 snapshot.im](st80x-snapshot-dv6-in-sample-env.png)
+
+
+#### Sample Smalltalk-80 Version 2 environment
+
+The directory `alto-v2` contains the following files for the Smalltalk-80 Version 2 sample environment:
 
 - the subdirectory `archive.org` with a copy of the Smalltalk-80 tape as found at the `archive.org` website
 
@@ -131,12 +314,11 @@ After unpacking the archive, the new subdirectory `sample-env` contains the foll
 
   -- the original `Smalltalk-80.sources` file from the Smalltalk-80 tape,
   
-  -- a handcrafted initial `Smalltalk-80.changes` file,
+  -- a handcrafted initial `Smalltalk-80.changes`,
   
-  -- a set of pictures (`*.form`) taken from the Smalltalk-80 DV6 floppies for Xerox 1186/6085 found at [Bitsavers](http://bitsavers.org/bits/Xerox/1186/1186_Smalltalk-80_DV6_Dec87.zip)
-  (see also **Remarks and limitations** below)
+  -- a set of pictures (`*.form`) taken from the Smalltalk-80 DV6 floppies for Xerox 1186 / 6085
      
-  -- scripts for creating the minimal Alto disk image (`build-snapshot-disk.cmd/.sh`) as well as an Alto disk image
+  -- scripts for creating the minimal Alto disk image (`build-snapshot-disk.cmd/.sh`) as well as an Alto disk
     including the `*.form` pictures (`build-snapshot-disk-with-forms.cmd/.sh`)
 
 - a data file set with base filename `snapshot` consisting of the original Smalltalk-80 Version 2 memory image (renamed
@@ -147,16 +329,12 @@ After unpacking the archive, the new subdirectory `sample-env` contains the foll
 - the archive `snapshot-2020.02.02_13.23.49.204.zip` created by the snapshot action and containing the original state
   of the Smalltalk-80 environment (i.e. unconnected to the Alto disk, display size 640x480 as delivered originally)
   
-- a set of scripts to simplify running ST80:
+For a quick start with Smalltalk-80 V2, enter the `sample-env` directory and enter `st80_v2` resp.
+`./st80_v2.sh` in a command shell; the following window should open (here on Windows):
 
-  -- `st80.cmd` resp. `st80.sh` to run ST80 and specify the environment and options on the command line
-  
-  -- `st80x.cmd` resp. `st80x.sh` to directly run the `snapshot` environment including all options for the western european time zone
-  
-For a quick start, enter the `sample-env` directory and enter `st80x` resp. `./st80x.sh` in a command shell; the following
-window should open (here on Windows):
+![ST80 in sample-env running the V2 snapshot.im](st80x-snapshot-in-sample-end.png)
 
-![ST80 in sample-env running snapshot.im](st80x-snapshot-in-sample-end.png)
+#### Shutting down either Smalltalk-80 versions
 
 To shut down the Smalltalk environment, move the mouse to a free place on the gray background and press the middle mouse button.
 The following command menu opens, select _Quit_ (probably already under the mouse position and therefore selected), which
@@ -176,7 +354,7 @@ A Java 8 (or newer) runtime on a decent window system is needed to run ST80.
 Having a hardware 3-button mouse button attached to system is recommended, as Smalltalk-80 is very mouse centric compared to
 modern user interfaces and defines interactions with the UI objects in terms of 3 mouse keys.
 
-Smalltalk-80 version 2 expects a standard english keyboard, so any international keyboard should be able to generate
+Smalltalk-80 expects a standard english keyboard, so any international keyboard should be able to generate
 the necessary input. However some specific key mappings should be known:
 
 - the left arrow (assignment) is equivalent to the '`_`' key
@@ -204,11 +382,21 @@ program invocation.
 ST80 has the following program parameters:
 
 - `imagename[.im]` _required_    
-  the name of the Smalltalk image and optionally accompanying Alto disk image file(s) in the data file set.
-  The extension `.im` of the image file can be omitted on the command line, the image filename must however
-  have this extension.    
-  _imagename_ specifies the name of the name on the data file set, consisting of the required virtual memory
-  image, the optional Alto disk image and possibly the delta file for the Alto file system.
+  the name of the Smalltalk image to run. The extension `.im` of the image file can be omitted on the command line,
+  the image file must however have this extension.    
+  Depending on the files besides the image, ST80 will decide which environment to use, checking first for an Alto and
+  then for a Tajo environment:
+  
+  -- If a file with extension `.dsk` matching the image filename is present, then an Alto environment is assumed
+     where _imagename_ specifies the name of the name on the data file set, consisting of the required virtual memory
+     image, the optional Alto disk image and possibly the delta file for the Alto file system.
+     
+  -- If a file with extension `.sources` or `.changes` matching the image filename is present, then ST80
+     assumes a Tajo enviroment and looks for a file `;searchpath.txt` in the same or up to 3 parent directories;
+     if the searchpath file is found, then the Tajo root volume is the directory of the searchpath file, else the
+     root volume is the directory of the image file.
+  
+  -- if none of the above, the image is run without an attached file system
 
 - `--statusline` _optional_    
   add the status line at the bottom of the ST80 application window
@@ -221,8 +409,18 @@ ST80 has the following program parameters:
   Background: the Smalltalk-80 Version 2 image reads GMT from the virtual machine, but hardcoded-ly
   adjusts local time to California time (i.e. Xerox-PARC time) and uses this for all time operations.
   This parameter modifies the GMT value generated to get a different local time computation, the value 540
-  produces western european non-DST local time.
+  produces western european non-DST local time.    
+  (this option should only be used when running a Version 2 image)
 
+- `--tz:offsetMinutes[:dstFirstDay:dstLastDay]` _optional_    
+  set the timezone and daylight saving parameters for a DV6 image    
+  as the DV6 image uses the local time parameters of the XDE/Tajo environment, this option allows to set
+  the local time offset to GMT in minutes (so positive value are in the east, e.g. 60 for western european time)
+  and the first and last daylight saving dates (given as day of the year, with the time change occuring in the
+  night to the next sunday following the given day).    
+  The defaults are "no timezone offset", "last sunday in march" and "last sunday in october". The option can
+  be given with the time offset alone or with all 3 values.
+  
 The status line added to the ST80 window with the `--statusline` parameter is present in the above
 screenshots. The values in the status line are updated about 3 times per second. `uptime` is the runtime
 of the program in seconds, `insns` is the average execution rate for Smalltalk instructions since the
@@ -385,23 +583,15 @@ messages or the file lists for `--list` or `--scan`)
   of the underlying OS (Linux, Windows etc.).    
   This may restrict the look&feel of some Smalltalk applications.
 
-- another Xerox Smalltalk-80 distribution can be found at Bitsavers ([1186_Smalltalk-80_DV6_Dec87](http://bitsavers.org/bits/Xerox/1186/1186_Smalltalk-80_DV6_Dec87.zip)).
-  This is Version 6 of Smalltalk-80 for the Xerox 1186/6085 Daybreak workstations (thus the _DV6_ version). The floppy
-  images at Bitsavers are slightly corrupted as each first track is lost, giving a hard time to read the floppies with
-  a modified version of the Dwarf emulator.    
-  The extracted Smalltalk-80 DV6 image uses a different encoding scheme for object pointers incompatible with the Bluebook
-  specification. Therefore this Smalltalk-80 system can currently **not** be executed with ST80, at least requiring deep
-  corrections to the image interpretation, in the hope that the remaining DV6 executable parts are still compatible with
-  the Bluebook virtual machine specification (instruction set, primitive set)...    
-  However, the DV6 floppies also contain the picture files (`*.form`) that can be played with in the older Version 2
-  environment (see the first ST80 screenshot).
-
 ### Bibliography
 
 The following files and documents available in the internet were useful for creating ST80:
 
 - [image.tar.gz](https://archive.org/download/smalltalk-80/image.tar.gz)    
   the archived Smalltalk-80 system found at the [archive.org](https://archive.org/) website
+
+- [1186_Smalltalk-80_DV6_Dec87.zip](http://bitsavers.org/bits/Xerox/1186/1186_Smalltalk-80_DV6_Dec87.zip)    
+  the Smalltalk-80 installation floppy images for Xerox 1186/6085 workstations found at the [Bitsavers](http://bitsavers.org/) website
 
 - [Smalltalk-80: the Language and its Implementation](http://stephane.ducasse.free.fr/FreeBooks/BlueBook/Bluebook.pdf)   
   Adele Goldberg and David Robson, 1983   
@@ -422,6 +612,21 @@ The following files and documents available in the internet were useful for crea
 - [aar.c](http://bitsavers.org/bits/Xerox/Alto/tools/aar.c)    
   L. Stewart 1992,1993    
   (C program to list and extract files from Alto disk images available at Bitsavers, useful for learning about the file system data structures of an Alto disk)
+
+- [Dlion_stklst.pdf](http://bitsavers.org/pdf/xerox/8010_dandelion/smalltalk/Dlion_stklst.pdf)    
+  (a collection of microcode and mesa listings found at the Bitsavers website, giving hints in pages 10 to 12 for understanding
+  the _Stretch_ mode modification to the Bluebook)
+
+### History
+
+- 2020-02-19    
+  new: added support for Smalltalk-80 DV6 for 1186 / 6085 workstation (Stretch object memory model)    
+  bugfix: prevent divide by zero when creating the status line, crashing at startup on (very) fast machines    
+  bugfix: handle combination rule for BitBlt outside [0..15] (Pen now paints black instead of white with default value 16)
+
+- 2020-02-02    
+  initial commit to Github    
+  support for Smalltalk-80 Version 2 for the Alto
 
 ### License
 

@@ -53,6 +53,8 @@ public class Config {
 	
 	public static final boolean TRACE_BITBLT = false; // LOG && true;
 	
-	public static final boolean TRACE_DISK_IO = false; // LOG && true;
+	public static final boolean TRACE_ALTODISK_IO = false; // LOG && true;
+	
+	public static final boolean TRACE_TAJO_OPS = false; // LOG && true;
 
 }

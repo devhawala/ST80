@@ -48,6 +48,11 @@ public class InterpreterBase {
 	
 	protected InterpreterBase() { }
 	
+	// what kind of object memory model is this image:
+	// - (false) a nominal Bluebook image (32k objects, 32k small integers)
+	// - (true) a 1186/1108 "stretch" image (48k objects, 16k small integers)
+	protected static boolean isStretch = false;
+	
 	/*
 	 * Registers of the interpreter
 	 */
@@ -170,7 +175,19 @@ public class InterpreterBase {
 	}
 	
 	protected static int largeContextFlagOf(int methodPointer) {
-		return extractBits(8, 8, headerOf(methodPointer));
+		if (isStretch) {
+			int flag = flagValueOf(methodPointer);
+			if (flag == 7) {
+				return extractBits(0, 0, headerExtensionOf(methodPointer));
+			} else if (flag == 5 || flag == 6) { // primitive returns of self resp. instance variable
+				return 0;
+			} else {
+				// int minSize = temporaryCountOf(methodPointer); // + expected stack size (but this is unknown!)
+				return 1; // just to be sure (unclear if a largeContext forces an headerExtension, so be on the safe side) 
+			}
+		} else {
+			return extractBits(8, 8, headerOf(methodPointer));
+		}
 	}
 	
 	protected static int literalCountOf(int methodPointer) {
@@ -178,7 +195,11 @@ public class InterpreterBase {
 	}
 	
 	public static int literalCountOfHeader(int headerPointer) {
-		return extractBits(9, 14, headerPointer);
+		if (isStretch) {
+			return extractBits(8, 13, headerPointer);
+		} else {
+			return extractBits(9, 14, headerPointer);
+		}
 	}
 	
 	public static int objectPointerCountOf(int methodPointer) {
@@ -206,13 +227,21 @@ public class InterpreterBase {
 		int flagValue = flagValueOf(methodPointer);
 		if (flagValue < 5) { return flagValue; }
 		if (flagValue < 7) { return 0; }
-		return extractBits(2, 6, headerExtensionOf(methodPointer));
+		if (isStretch) {
+			return extractBits(1, 5, headerExtensionOf(methodPointer));
+		} else {
+			return extractBits(2, 6, headerExtensionOf(methodPointer));
+		}
 	}
 	
 	protected static int primitiveIndexOf(int methodPointer) {
 		int flagValue = flagValueOf(methodPointer);
-		if (flagValue == 7) { 
-			return extractBits(7, 14, headerExtensionOf(methodPointer));
+		if (flagValue == 7) {
+			if (isStretch) {
+				return extractBits(6, 13, headerExtensionOf(methodPointer));
+			} else {
+				return extractBits(7, 14, headerExtensionOf(methodPointer));
+			}
 		}
 		return 0;
 	}
@@ -326,16 +355,34 @@ public class InterpreterBase {
 		return literal(offset, method);
 	}
 	
+	// additional
+	public static int argumentCount() {
+		return argumentCount;
+	}
+	
 	/*
 	 * Bluebook p. 586..: "Classes"
 	 */
 	
 	protected static int hash(int objectPointer) {
-		return (objectPointer >> 1) & 0x7FFF;
+		return Memory.objectPointerAsOop(objectPointer); // works for Bluebook and for DV6-Stretch
+//		return (objectPointer >> 1) & 0x7FFF; // works only for Bluebook, but not for DV6-Strech as SmallInteger representation changed
 	}
 	
 	protected static boolean lookupMethodInDictionary(int dictionary) {
 		int length = Memory.fetchWordLengthOf(dictionary);
+//		if (isStretch) {
+//			for (int idx = Well.known().SelectorStart; idx < length; idx++) {
+//				int nextSelector = Memory.fetchPointer(idx, dictionary);
+//				if (nextSelector == messageSelector) {
+//					int methodArray = Memory.fetchPointer(Well.known().MethodArrayIndex, dictionary);
+//					newMethod = Memory.fetchPointer(idx - Well.known().SelectorStart, methodArray);
+//					primitiveIndex = primitiveIndexOf(newMethod);
+//					return true;
+//				}
+//			}
+//			return false;
+//		}
 		int mask = length - Well.known().SelectorStart - 1;
 		int index = (mask & hash(messageSelector)) + Well.known().SelectorStart;
 		int startIndex = index;
@@ -412,7 +459,11 @@ public class InterpreterBase {
 	}
 	
 	public static int fixedFieldsOf(int classPointer) {
-		return extractBits(4, 14, instanceSpecificationOf(classPointer));
+		if (isStretch) {
+			return extractBits(3, 13, instanceSpecificationOf(classPointer));
+		} else {
+			return extractBits(4, 14, instanceSpecificationOf(classPointer));
+		}
 	}
 	
 	/*
@@ -434,6 +485,9 @@ public class InterpreterBase {
 	}
 	
 	public static void disassembleMethodContext(int contextPointer) {
+		// setup
+		isStretch = Memory.isStretch();
+		
 		// get the method-context
 		OTEntry context = Memory.ot(contextPointer);
 		if (context.getClassOOP() == Well.known().ClassBlockContextPointer) {
@@ -548,7 +602,7 @@ public class InterpreterBase {
 				int ext = method.fetchByteAt(instrBase + ip);
 				ip++;
 				int opt = (ext >> 6) & 0x03;
-				logf("push %s #%d", options2[opt], ext & 0xCF);
+				logf("push %s #%d", options2[opt], ext & 0x3F);
 			} else if (code == 129) {
 				int ext = method.fetchByteAt(instrBase + ip);
 				ip++;

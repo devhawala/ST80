@@ -27,8 +27,10 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package dev.hawala.st80vm.primitives;
 
 import static dev.hawala.st80vm.interpreter.InterpreterBase.popStack;
+import static dev.hawala.st80vm.interpreter.Interpreter.positive16BitValueOf;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.pop;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.push;
+import static dev.hawala.st80vm.interpreter.InterpreterBase.success;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.unPop;
 
 import java.util.ArrayList;
@@ -423,8 +425,13 @@ public class InputOutput {
 		//   -> justSnapped will be false => the current method will continue to run and ignore quit
 		// after writing the snapshot, we put NIL on the stack
 	    //  -> justSnapped will be true and the current method will check for quit
+	
+		// drop arguments (V2: none, DV6: 0..1 arguments)
+		for (int i = 0; i < Interpreter.argumentCount(); i++) {
+			popStack();
+		}
 		
-//		System.out.println("\n\n###\n#### write snapshot\n###\n");
+		// write snapshot
 		Interpreter.prepareSnapshot();
 		if (vmFilesHandler != null) {
 			vmFilesHandler.saveSnapshot(System.out);
@@ -432,8 +439,9 @@ public class InputOutput {
 			Memory.saveVirtualImage(null); // write the new snapshot with same name as the loaded one
 		}
 		
+		// set return value for the continuing session
 		pop(1); // remove self
-		push(Well.known().NilPointer); // tell invoker continuing in the same session that the snapshot was just taken
+		push(Well.known().NilPointer); // tell invoker we are continuing in the same session by which the snapshot was just taken
 		return true;
 	};
 	
@@ -477,6 +485,39 @@ public class InputOutput {
 			armSignalAtTimer(semaphore, atTickValue);
 		} else {
 			armSignalAtTimer(NO_AT_TICK_TIMER, -1);
+		}
+		
+		return true;
+	};
+
+	// based on Smalltalk default code for ByteArray :: replaceFrom: start to: stop withString: aString startingAt: repStart 
+	public static final Primitive primitiveStringReplace = () -> { w("primitiveStringReplace");
+		//System.out.printf("\n+++++++++ primitive primitiveStringReplace()");
+		int repStart = positive16BitValueOf(popStack());
+		int replacementPointer = popStack();
+		int stop = positive16BitValueOf(popStack());
+		int start = positive16BitValueOf(popStack());
+		int selfPointer = popStack();
+		if (!success()) {
+			unPop(5);
+			return false;
+		}
+		push(selfPointer); // return self at end
+		
+		OTEntry self = Memory.ot(selfPointer);
+		int maxSelfIndex = self.getByteLength();
+		OTEntry replacement = Memory.ot(replacementPointer);
+		int maxReplIndex = replacement.getByteLength();
+		
+		// Smalltalk indexes start at 1
+		int index = start - 1;
+		int replOff = repStart - start;
+		while(index < stop) {
+			int replIndex = replOff + index;
+			if (index >= maxSelfIndex) { break; }
+			if (replIndex >= maxReplIndex) { break; }
+			int b = replacement.fetchByteAt(replIndex);
+			self.storeByteAt(index++, b);
 		}
 		
 		return true;

@@ -57,11 +57,11 @@ public class AltoVmFilesHandler implements iVmFilesHandler {
 		this.altoDiskFilename = diskName;
 		
 		// load the file set
-		Memory.loadVirtualImage(this.imageFilename, false);
+		Memory.loadVirtualImage(this.imageFilename);
 		Disk.loadDiskImage(new File(this.altoDiskFilename)); // this also loads the delta if present
 	}
 	
-	public static AltoVmFilesHandler forImageFile(String imageName) throws IOException {
+	public static AltoVmFilesHandler forImageFile(String imageName, StringBuilder sb) throws IOException {
 		String imageFilename;
 		String altoDiskFilename;
 		if (imageName.endsWith(".im")) {
@@ -73,16 +73,16 @@ public class AltoVmFilesHandler implements iVmFilesHandler {
 		}
 		
 		if (!(new File(imageFilename)).canRead()) {
-			System.out.printf("** image file '%s' not found\n", imageFilename);
+			sb.append("** image file '").append(imageFilename).append("' not found (for Version 2 / Alto)\n");
 			return null;
 		} else if (!(new File(altoDiskFilename)).canRead()) {
-			System.out.printf("** Alto disk file '%s' not found\n", altoDiskFilename);
+			sb.append("** Alto disk file '").append(altoDiskFilename).append("' not found\n");
 			return null;
 		} else {
 			try {
 				return new AltoVmFilesHandler(imageFilename, altoDiskFilename);
 			} catch (InvalidDiskException e) {
-				System.out.printf("** Alto disk invalid, not using disk '%s'\n", altoDiskFilename);
+				sb.append("** Alto disk invalid, not using disk '").append(altoDiskFilename).append("%s'\n");
 				return null;
 			}
 		}

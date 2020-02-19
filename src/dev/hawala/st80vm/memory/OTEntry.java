@@ -39,6 +39,7 @@ public interface OTEntry {
 	 */
 	
 	int objectPointer();
+	int linearObjectPointer();
 	
 	boolean isSmallInt();
 	boolean isObject();

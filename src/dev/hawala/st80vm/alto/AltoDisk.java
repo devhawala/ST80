@@ -43,7 +43,7 @@ import dev.hawala.st80vm.primitives.iVmFilesHandler;
 public class AltoDisk {
 	
 	private static void logf(String format, Object... args) {
-		if (Config.TRACE_DISK_IO) { System.out.printf(format, args); }
+		if (Config.TRACE_ALTODISK_IO) { System.out.printf(format, args); }
 	}
 	
 	/*

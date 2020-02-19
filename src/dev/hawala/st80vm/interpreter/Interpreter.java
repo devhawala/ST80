@@ -33,6 +33,8 @@ import java.util.function.Consumer;
 
 import dev.hawala.st80vm.Config;
 import dev.hawala.st80vm.alto.AltoDisk;
+import dev.hawala.st80vm.d11xx.Dv6Specifics;
+import dev.hawala.st80vm.d11xx.TajoDisk;
 import dev.hawala.st80vm.memory.Memory;
 import dev.hawala.st80vm.memory.Well;
 import dev.hawala.st80vm.primitives.BitBlt;
@@ -95,6 +97,7 @@ public class Interpreter extends InterpreterBase {
 	
 	public static void interpret() {
 		// setup the interpretation machine
+		isStretch = Memory.isStretch();
 		installInstructions();
 		installPrimitives();
 		startTs = System.currentTimeMillis();
@@ -613,6 +616,25 @@ public class Interpreter extends InterpreterBase {
 		return value;
 	}
 	
+	// (additional)
+	public static int positive32BitIntegerFor(long integerValue) {
+		if (integerValue < 0) {
+			primitiveFail();
+			return Well.known().NilPointer;
+			
+		}
+		if (integerValue < 0xFFFFL && Memory.isIntegerValue((int)integerValue)) {
+			return Memory.integerObjectOf((int)integerValue);
+		}
+		int bytes = (integerValue > 0x00FFFFFFL) ? 4 :(integerValue > 0x0000FFFFL) ? 3 : 2;
+		int newLargeInteger = Memory.instantiateClassWithBytes(Well.known().ClassLargePositivelntegerPointer, bytes);
+		Memory.storeByte(0, newLargeInteger, (int)(integerValue & 0xFF));
+		Memory.storeByte(1, newLargeInteger, (int)((integerValue >> 8) & 0xFF));
+		if (bytes > 2) { Memory.storeByte(2, newLargeInteger, (int)((integerValue >> 16) & 0xFF)); }
+		if (bytes > 3) { Memory.storeByte(3, newLargeInteger, (int)((integerValue >> 24) & 0xFF)); }
+		return newLargeInteger;
+	}
+	
 	/*
 	 * Bluebook pp. 618: special primitive invocation
 	 */
@@ -1039,7 +1061,7 @@ public class Interpreter extends InterpreterBase {
 			// refresh status shown on the UI
 			if (nextStatusRefreshTs < now) {
 				long uptimeMs = System.currentTimeMillis() - startTs;
-				long intervalMs = uptimeMs - lastUptimeMs;
+				long intervalMs = Math.max(1, uptimeMs - lastUptimeMs); // prevent divide by zero at startup on fast machines
 				long instrPerSecond = (instrCount - lastInstrCount) * 1000 / intervalMs;
 				long totalMsgs = messageAsSmalltalkCount + messageAsPrimitiveCount + messageAsSpecialPrimitiveCount;
 				long msgPerSecond = (totalMsgs - lastTotalMsg) * 1000 / intervalMs;
@@ -1342,6 +1364,8 @@ public class Interpreter extends InterpreterBase {
 		allPrimitives[52] = FloatIeee.primitiveFloatFractionalPart;
 		// allPrimitives[53] = FloatIeee.primitiveFloatExponent;  // optional ... not implemented
 		allPrimitives[54] = FloatIeee.primitiveFloatTimesTwoPower;
+		allPrimitives[55] = FloatIeee.primitiveFloatSinus; // DV6
+		allPrimitives[56] = FloatIeee.primitiveFloatCosinus; // DV6
 		
 		// array and stream primitives (60 .. 67)
 		allPrimitives[60] = primitiveAt;
@@ -1395,8 +1419,8 @@ public class Interpreter extends InterpreterBase {
 		allPrimitives[101] = InputOutput.primitiveBeCursor;
 		allPrimitives[102] = InputOutput.primitiveBeDisplay;
 		allPrimitives[103] = BitBlt.primitiveScanCharacters; // optional
-		allPrimitives[104] = BitBlt.primitiveDrawLoopX;
-//		allPrimitives[105] = InputOutput.primitiveStringReplace; // optional
+		allPrimitives[104] = BitBlt.primitiveDrawLoopX; // optional
+		allPrimitives[105] = InputOutput.primitiveStringReplace; // optional
 		
 		// system primitives (110 .. 116)
 		allPrimitives[110] = primitiveEquivalent;
@@ -1409,8 +1433,21 @@ public class Interpreter extends InterpreterBase {
 		
 		
 		// vendor specific primitives (128..255)
+		// V2 ~ Bluebook on Alto
 		allPrimitives[128] = AltoDisk.primitiveDskPrim;
 		allPrimitives[135] = AltoDisk.primitiveBeSnapshotSerialNumber;
+		
+		// DV6 ~ Stretch on 1108/1186
+		allPrimitives[138] = Dv6Specifics.primitiveGarbageCollect;
+		allPrimitives[143] = Dv6Specifics.primitiveCountBits;
+		allPrimitives[176] = Dv6Specifics.primitiveSpecialReplaceInBytes;
+		allPrimitives[177] = Dv6Specifics.primitiveSpecialReplaceInWords;
+		allPrimitives[197] = Dv6Specifics.primitiveFirstOwner;
+		allPrimitives[198] = Dv6Specifics.primitiveNextOwner;
+		allPrimitives[199] = BitBlt.primitiveDrawCircle;
+		allPrimitives[222] = Dv6Specifics.primitiveLocalTimeParametersInto;
+		allPrimitives[240] = TajoDisk.primitivePilotCall;
+		allPrimitives[253] = Dv6Specifics.primitiveDefer;
 		
 		
 		// initialize unimplemented primitives

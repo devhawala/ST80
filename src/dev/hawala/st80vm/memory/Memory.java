@@ -35,7 +35,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.function.BiPredicate;
@@ -68,15 +70,24 @@ import dev.hawala.st80vm.interpreter.Interpreter;
  * in the Bluebook and use a simpler design:
  * </p>
  * <ul>
- * <li>the object table resides outside the heap, leaving more heap space to Smalltalk</li>
- * <li>the object table holds Java object instances describing the Smalltalk object at their
+ * <li>the object management has 2 object tables</li>
+ * <li>these object tables reside outside the heap, leaving more heap space to Smalltalk</li>
+ * <li>the Bluebook object table holds Java object instances describing the Smalltalk object at their
  * OOP in the table; this allows to have more runtime state about objects than allowed by the
- * 2 words in the original Smalltalk-80 object table</li>
- * <li>the object table is 65536 entries long and holds the representations of all objects, including
+ * 2 words in the original Smalltalk-80 object table; this table is indexed with the object-pointer
+ * resp. OOP of an object</li>
+ * <li>the linear object table holds the same Java object instances for the Smalltalk objects,  but
+ * addressed by their "linear object pointer", where 'nil' is object 1, 'false' is object 2, 'true'
+ * is object '2' etc. 
+ * <br/>This second table allows to address objects in a linear fashion (first all "real"
+ * objects, then all SmallIntegers) independently of how all items are interlaced in the Bluebook
+ * object table (alternating by the Bluebook (smallint-1, object-1, smallint-2, object-2, ...), but more
+ * complicated  for the Stretch model (smallint-1, object-1, object-48k, object-2, smallint-2, ... ))</li>
+ * <li>the object tables are 65536 entries long and hold the representations of all objects, including
  * SmallInteger OOPs, allowing for an uniform addressing and handling scheme of all objects without caring
- * if an OOP is the SmallInteger exception (no heap space, no object table entry) as Smalltalk-80 specified it.</li>
+ * if an OOP is the SmallInteger exception as Smalltalk-80 specified it (no heap space, no object table entry).</li>
  * <li>heap compaction can simply use a second memory space for copying the instance memory of objects (i.e.
- * using 2x 1 MWords for heap space, in total 4 MByte)
+ * using 2x 1 MWords for heap space, in total 4 MByte)</li>
  * </ul>
  * 
  * @author Dr. Hans-Walter Latz / Berlin (2020)
@@ -115,7 +126,13 @@ public class Memory {
 	
 	private static int heapSizeLoadedLimit = -1;
 	
-	// the ObjectTable of the Smalltalk-80 machine (16 bit OOPs)
+	// flag indicating if the image is Bluebook compatible (32k object, 32k smallints)
+	// or it if uses the 1186 DV6 "Stretch" model (48k objects, 16k smallints, with specific OOP scheme)
+	private static boolean isStretch = false;
+	
+	public static boolean isStretch() { return isStretch; }
+	
+	// the ObjectTable of the Smalltalk-80 machine (16 bit OOPs) as specified by the Bluebook
 	// capacity: 65536 entries => 32678 SmallIntegers , max. 32768 object-pointer
 	// each OOP has 2 words (shorts) in the ObjectTable (from most to least significant, according to BlueBook p.661):
 	// - word[0]:
@@ -131,30 +148,33 @@ public class Memory {
 	// difference to Bluebook in this implementation: the objectTable holds both objects and smallintegers at
 	// their respective objectPointer, the entries are instances of either OTIntEntry or OTObjectEntry, which
 	// have the same interface but behave differently
+	//
+	// variables used for addressing in this table are named like "objectPointer" or "oop" (for object-oriented pointer)
 	private static OTEntry[] objectTable;
+	
+	// linear object table holding the same objects as 'objectTable' above, but arranged in the linear (natural)
+	// fashion instead of indexing by the objectPointer/OOP. This 2nd table simplifies enumerating through all
+	// objects, as
+	// - addressing is independent of the objectPointer scheme used (Bluebook or Stretch)
+	// - objects and smallints are clearly separated instead of interlaced
+	// 
+	// variables used for addressing in this table are named like "lop" (for linear object pointer)
+	private static OTEntry[] linearObjectTable;
 	
 	// total number of free objects in the objectTable, no matter if truly free or in one of the free-lists 
 	private static int freeObjectCount = 0;
 	
-	// current usage limit of object-pointers
+	// current usage limit of linear-object-pointers
 	// (automatically incremented when all object-pointers below the limit are exhausted)
-	private static int otLimit;
+	private static int lotLimit;
 	
-	// boundary interval for the high-mark of OOPs to be considered for allocation
+	// boundary interval for the high-mark of LOPs to be considered for allocation
 	// (transgressing the high-mark will cause a compaction and raising the high-mark by this value
-	// if no free OOPs are available below the high-mark after compaction)
-	private static final int OTLIMIT_LEAPS = 256;
+	// if no free LOPs are available below the high-mark after compaction)
+	private static final int LOTLIMIT_LEAPS = 256;
 	
 	// lowest last known free OOP (hint for starting search the next free OOP)
-	private static int lowestFreeOop = 1;
-	
-	// last bit of true objectPointer (i.e. SmallIntegers have the inverted bit)
-	// Bluebook: 0 => object , 1 => smallinteger
-	// but DV6!: 1 => object , 0 => smallinteger
-	private static int oopMarkerBit = 0;
-	
-	// last bit for a SmallInteger oop
-	private static int smallIntMarkerBit = 1;
+	private static int lowestFreeLop = 1;
 	
 	// specific object instances required for garbage collection (if mark&sweep GC is ever implemented)
 	private static int processorOop;
@@ -178,27 +198,98 @@ public class Memory {
 	}
 	
 	private static void initializeObjectTable() {
-		// check which oop marker bit is used by this image
-		oopMarkerBit = heapMemory[1] & 0x0001; // this assumes that the first 2 heap words have an object, usually the content of 'NilPointer', this is then Nil's classPointer
 		
-		// inverse the oop Marker bit for SmallInteger
-		smallIntMarkerBit = (oopMarkerBit == 0) ? 1 : 0;
-		
-		// create the ObjectTable entries
-		int nextOOP = 0;
 		objectTable = new OTEntry[65536];
-		while (nextOOP < objectTable.length) {
-			if (oopMarkerBit == 0) {
-				objectTable[nextOOP] = new OTObjectEntry(nextOOP);
-				objectTable[nextOOP+1] = new OTIntEntry(nextOOP+1);
-			} else {
-				objectTable[nextOOP] = new OTIntEntry(nextOOP);
-				objectTable[nextOOP+1] = new OTObjectEntry(nextOOP+1);
-			}
-			
-			nextOOP += 2;
+		linearObjectTable = new OTEntry[65536];
+		
+		// create SmallInteger entries
+		int zero = (isStretch) ? 0 : 1; // Bluebook: SmallIntegers have lowest bit = 1 , Stretch: SmallIntegers have 2 lowest bits == 0;
+		int step = (isStretch) ? 4 : 2; // increment for next SmallInteger oop
+		int shift = (isStretch) ? 2 : 1; // shift right amount to get the int value from an oop
+		int linBase = (isStretch) ?  49152 : 32768; // positive small-ints start at linear 48k for stretch and 32k for Bluebook
+		for (int oop = zero; oop < objectTable.length; oop += step) {
+			short intValue = (short)(((short)oop) >> shift);
+			int lop = (intValue >= 0) ? (linBase + intValue) : (65536 + intValue);
+			OTEntry e = new OTIntEntry(intValue, oop, lop);
+			objectTable[oop] = e;
+			linearObjectTable[lop] = e;
 		}
-		otLimit = OTLIMIT_LEAPS; // smallest limit, giving a enough entries before the limit must be raised
+		
+		// create first 32768 Object entries (common to both variants, except for where it starts)
+		int firstOop = (isStretch) ? 1 : 0; // the first object (the one before Nil) is unused, but should be there...
+		linearObjectTable[0] = new OTObjectEntry(firstOop, 0);
+		objectTable[firstOop] = linearObjectTable[0];
+		int lop = 1;
+		for (int oop = firstOop + 2; oop < objectTable.length; oop += 2) {
+			OTEntry e = new OTObjectEntry(oop, lop);
+			objectTable[oop] = e;
+			linearObjectTable[lop++] = e;
+		}
+		
+		// if stretch: fill the gaps left above with 16k more objects
+		// starts at oop = 2 as: 0 is zero, 1 is the "unused" object, 3 is nil, 4 is one etc.
+		if (isStretch) {
+			for (int oop = 2; oop < objectTable.length; oop += 4) {
+				OTEntry e = new OTObjectEntry(oop, lop);
+				objectTable[oop] = e;
+				linearObjectTable[lop++] = e;
+			}
+		}
+		
+		// set the limit for GC (will surely be reset when reading the image
+		lotLimit = LOTLIMIT_LEAPS; // smallest limit, giving a enough entries before the limit must be raised
+		
+		// paranoia checks:
+		// - check there is no null entry in either table
+		// - Bluebook: even oop: object, odd oop: small-int, linear < 32k: object, linear >= 32k: positive int, linear >= 48k: negative int
+		// - stretch: oop mod 4 == 0 => int, rest object, linear >= 48k: positive int, linear >= 56k: negative int
+		boolean hadNull = false;
+		for (int l = 0; l < linearObjectTable.length; l++) {
+			if (linearObjectTable[l] == null) { hadNull = true; System.out.printf("init-err: linearObjectTable[%d] == null\n", l); }
+		}
+		for (int o = 0; o < objectTable.length; o++) {
+			if (objectTable[o] == null) { hadNull = true; System.out.printf("init-err: objectTable[%d] == null\n", o); }
+		}
+		if (hadNull) { System.exit(-1); }
+		if (isStretch) {
+			for (int o = 0; o < objectTable.length; o++) {
+				OTEntry e = objectTable[o];
+				if ((o % 4) == 0 && !e.isSmallInt()) { System.out.printf("** init-stretch-err: oop %d is not small-integer\n", o); }
+				if ((o % 4) != 0 && !e.isObject()) { System.out.printf("** init-stretch-err: oop %d is not object\n", o); }
+			}
+			for (int l = 0; l < linearObjectTable.length; l++) {
+				OTEntry e = linearObjectTable[l];
+				if (l < 49152 && !e.isObject()) { System.out.printf("** init-stretch-err: linear %d is not object\n", l); }
+				if (l >= 49152) {
+					if (!e.isSmallInt()) {
+						System.out.printf("** init-stretch-err: linear %d is not small-integer\n", l);
+					} else {
+						OTIntEntry i = (OTIntEntry)e;
+						if (l < 57344 && i.intValue() < 0) { System.out.printf("** init-stretch-err: linear %d is not positive\n", l); }
+						if (l >= 57344 && i.intValue() >= 0) { System.out.printf("** init-stretch-err: linear %d is not negative\n", l); }
+					}
+				}
+			}
+		} else {
+			for (int o = 0; o < objectTable.length; o++) {
+				OTEntry e = objectTable[o];
+				if ((o & 1) == 0 && !e.isObject()) { System.out.printf("** init-bluebook-err: oop %d is not object\n", o); }
+				if ((o & 1) == 1 && !e.isSmallInt()) { System.out.printf("** init-bluebook-err: oop %d is not small-integer\n", o); }
+			}
+			for (int l = 0; l < linearObjectTable.length; l++) {
+				OTEntry e = linearObjectTable[l];
+				if (l < 32768 && !e.isObject()) { System.out.printf("** init-bluebook-err: linear %d is not object\n", l); }
+				if (l >= 32768) {
+					if (!e.isSmallInt()) {
+						System.out.printf("** init-bluebook-err: linear %d is not small-integer\n", l);
+					} else {
+						OTIntEntry i = (OTIntEntry)e;
+						if (l < 49152 && i.intValue() < 0) { System.out.printf("** init-bluebook-err: linear %d is not positive\n", l); }
+						if (l >= 49152 && i.intValue() >= 0) { System.out.printf("** init-bluebook-err: linear %d is not negative\n", l); }
+					}
+				}
+			}
+		}
 	}
 	
 	/*
@@ -237,7 +328,7 @@ public class Memory {
 		return true;
 	}
 	
-	public static void loadVirtualImage(String filename, boolean fixDV6missingSegments) throws IOException {
+	public static void loadVirtualImage(String filename) throws IOException {
 		try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(filename))) {
 			
 			imageFilename = filename; // seems to exist, so remember it
@@ -253,7 +344,7 @@ public class Memory {
 			// interpret and check relevant metadata
 			int lastSegment = buffer[0];
 			int limitInLastPage = buffer[1] & 0xFFFF;
-			int usedWordsInObjectTable = buffer[3] & 0xFFFF;
+			int usedWordsInObjectTable = ((buffer[2] & 0xFFFF) << 16) | buffer[3] & 0xFFFF;
 			if (lastSegment < 0 || lastSegment > 15) { throw new RuntimeException("Invalid VirtualImage, invalid lastSegment: " + lastSegment); }
 			if ((usedWordsInObjectTable & 1) != 0) { throw new RuntimeException("Invalid VirtualImage (odd number of words in ObjectTable"); }
 			
@@ -282,17 +373,20 @@ public class Memory {
 			 * virtual-image object-table
 			 */
 			
+			// check somehow if it is a stretch (DV6) image ...
+			isStretch = (buffer[4] != 0); // this is a significant difference between V2 and DV6, but does this mean: stretch?
+			
 			// create the empty object table
 			initializeObjectTable();
 			
 			// read object table
-			int entryOop = oopMarkerBit;
+			int entryLop = 0;
 			int loadedEntries = 0;
 			int freeEntries = 0;
 			int firstFreeEntry = -1;
 			int lastW1 = -1;
 			int currSegment = 0;
-			int lastLoadedOop = -1;
+			int lastLoadedLop = -1;
 			boolean done = false;
 			while(!done) {
 				len = loadPage(bis, buffer, 0);
@@ -301,28 +395,28 @@ public class Memory {
 				while(pos < len) {
 					int currW0 = buffer[pos] & 0xFFFF;
 					int currW1 = buffer[pos+1] & 0xFFFF;
-					if (fixDV6missingSegments) {
-						if (currW0 != 0x0020 && lastW1 > currW1) {
+					if (currW0 != 0x0020) {
+						if (lastW1 > currW1) {
 							currSegment = (currSegment + 1) & 0x000F;
-							// logf("... apparent segment transition to segment %2d at oop 0x%04X\n", currSegment, entryOop);
+//							logf("... apparent segment transition to segment %2d at lop 0x%04X\n", currSegment, entryLop);
 						}
-						if (currW0 != 0x0020 && (currW0 & 0x000F) == 0) {
+						if ((currW0 & 0x000F) == 0) {
 							currW0 |= currSegment;
 						}
 						lastW1 = currW1;
 					}
-					objectTable[entryOop].fromWords((short)currW0, (short)currW1);
-					if (objectTable[entryOop].freeEntry()) {
-						if (entryOop > oopMarkerBit) { // skip 1st entry (reserved))
+					linearObjectTable[entryLop].fromWords((short)currW0, (short)currW1);
+					if (linearObjectTable[entryLop].freeEntry()) {
+						if (entryLop > 0) { // skip 1st entry (reserved))
 							freeEntries++;
 							if (firstFreeEntry < 0) {
-								firstFreeEntry = entryOop;
+								firstFreeEntry = entryLop;
 							}
 						}
 					} else {
-						lastLoadedOop = entryOop;
+						lastLoadedLop = entryLop;
 					}
-					entryOop += 2;
+					entryLop++;
 					pos += 2;
 					loadedEntries++;
 				}
@@ -330,18 +424,18 @@ public class Memory {
 			}
 			
 			// compute the upper limit of objects used so far, rounded up to 128 objects
-			int tmpOtLimit = lastLoadedOop & 0xFF00;
-			otLimit = Math.min(65536, tmpOtLimit + 0x0100);
+			int tmpLotLimit = lastLoadedLop & 0xFF00;
+			lotLimit = Math.min(65536, tmpLotLimit + 0x0100);
 			
 			// get the number of free objects in the objectTable
-			freeObjectCount = freeEntries + ((objectTable.length / 2) - loadedEntries);
+			freeObjectCount = freeEntries + ((linearObjectTable.length / 2) - loadedEntries);
 			
 			/*
 			 * derive information (classes, objects) not fixed ("guaranteed") in the Bluebook
 			 */
 			
 			// determine important class OOPs, using the well-known OOP of Nil
-			OTEntry nil = ot(oopMarkerBit + 2); // first OOP in objectTable is unused, second is: NilPointer
+			OTEntry nil = linearObjectTable[1]; // first object in linearObjectTable is 'unused', second is: NilPointer
 			OTEntry cls = ot(nil.getClassOOP());
 			OTEntry clsMetaclass = ot(cls.getClassOOP());
 			int nameSymbolOop = heapMemory[cls.address() + 8] & 0xFFFF; // location of the classname-symbol
@@ -370,7 +464,7 @@ public class Memory {
 			int classSemaphorePointer = -1;
 			int classAssociationPointer = -1;
 			int yieldSelectorPointer = -1;
-			int metaclassOop = oopMarkerBit;
+			int metaclassLop = nil.linearObjectPointer();
 			while ( ( classCompiledMethodPointer == -1 
 					  || classSmallIntegerPointer == -1
 					  || classLargeNegativeIntegerPointer == -1
@@ -380,8 +474,8 @@ public class Memory {
 					  || classFloatPointer == -1
 					  || classSemaphorePointer == -1
 					  || yieldSelectorPointer == -1)
-					&& metaclassOop < objectTable.length) {
-				OTEntry otMetaclass = ot(metaclassOop);
+					&& metaclassLop < objectTable.length) {
+				OTEntry otMetaclass = linearObjectTable[metaclassLop];
 				if (otMetaclass.getClassOOP() == classMetaclassPointer) {
 					int classOop = otMetaclass.fetchPointerAt(6); // field for the class this metaclass is for
 					OTEntry otClass = ot(classOop);
@@ -413,15 +507,15 @@ public class Memory {
 					if (classAssociationPointer == -1 && isSymbol(otClassNameSymbolPointer, associationSymbol)) {
 						classAssociationPointer = classOop;
 					}
-				} else if (yieldSelectorPointer == -1 && isSymbol(metaclassOop, yieldSymbol)) {
-						yieldSelectorPointer = metaclassOop;
+				} else if (yieldSelectorPointer == -1 && isSymbol(metaclassLop, yieldSymbol)) {
+						yieldSelectorPointer = metaclassLop;
 					}
-				metaclassOop += 2;
+				metaclassLop++;
 			}
 			
 			// initialize well-known object-pointers etc.
 			Well.initialize(
-					oopMarkerBit,
+					isStretch,
 					classSymbolPointer,
 					classMetaclassPointer,
 					classCompiledMethodPointer,
@@ -457,9 +551,9 @@ public class Memory {
 			
 			// prepare memory management heap- and object-counters/-indicators for usage
 			if (firstFreeEntry >= 0) {
-				lowestFreeOop = firstFreeEntry;
+				lowestFreeLop = firstFreeEntry;
 			} else {
-				lowestFreeOop = Well.known().NilPointer;
+				lowestFreeLop = Well.known().NilPointer;
 			}
 			gc("initial");
 			
@@ -469,11 +563,10 @@ public class Memory {
 				System.out.printf(" - heapSizeLoadedLimit ............ = 0x%06X\n", heapSizeLoadedLimit);
 				System.out.printf(" - usedWordsInObjectTable ......... = %d\n", usedWordsInObjectTable);
 				System.out.printf(" - loadedEntries .................. = %d\n", loadedEntries);
-				System.out.printf(" - lastLoadedOop .................. = %d\n", lastLoadedOop);
-				System.out.printf(" - otLimit ........................ = %d\n", otLimit);
+				System.out.printf(" - lastLoadedLop .................. = %d\n", lastLoadedLop);
 				System.out.printf(" - freeEntries .................... = %d (below loadedEntries)\n", freeEntries);
 				System.out.printf(" - freeEntries .................... = %d (total)\n", freeEntries + (32768 - loadedEntries));
-				System.out.printf(" - otLimit ........................ = %d\n", otLimit);
+				System.out.printf(" - lotLimit ....................... = %d\n", lotLimit);
 				System.out.printf(" - classSymbolPointer ............. = 0x%04X\n", classSymbolPointer);
 				System.out.printf(" - classMetaclassPointer .......... = 0x%04X\n", classMetaclassPointer);
 				System.out.printf(" - classCompiledMethodPointer ..... = 0x%04X\n", classCompiledMethodPointer);
@@ -513,15 +606,16 @@ public class Memory {
 	public static void writeSnapshotFile(String toFilename) throws IOException {
 		try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(toFilename))) {
 			// reduce memory usage before writing and get the last objectPoointer really in use
-			int lastOop = gc("snapshot");
+			int lastLop = gc("snapshot");
 			
 			// create & write metadata page
-			int otWordCount = (lastOop & 0xFFFE) + 2;
+			int otWordCount = (lastLop & 0xFFFE) + 2;
 			resetBuffer();
 			buffer[0] = (short)((heapUsed >> 16) & 0xFFFF);
 			buffer[1] = (short)(heapUsed & 0xFFFF);
 			buffer[2] = (short)((otWordCount >> 16) & 0xFFFF);
 			buffer[3] = (short)(otWordCount & 0xFFFF);
+			if (isStretch) { buffer[4] = 1; } // in symmetry to loadVirtualImage, hoping this is the right place (it is for us now!)
 			writeWords(bos, buffer, buffer.length);
 			
 			// write heap (used heap words, rounded up to a full page)
@@ -534,8 +628,8 @@ public class Memory {
 			
 			// write object table (only words effectively in use)
 			int wordsInPage = 0;
-			for (int oop = oopMarkerBit; oop <= lastOop; oop +=2) {
-				OTEntry oe = ot(oop);
+			for (int lop = 0; lop <= lastLop; lop++) {
+				OTEntry oe = linearObjectTable[lop];
 				buffer[wordsInPage++] = oe.getWord0();
 				buffer[wordsInPage++] = oe.getWord1();
 				if (wordsInPage >= buffer.length) {
@@ -562,7 +656,7 @@ public class Memory {
 			File snapshotFile = new File(fn);
 			if (snapshotFile.exists()) {
 				SimpleDateFormat sdf = new SimpleDateFormat("yyyy.MM.dd_HH.mm.ss.SSS");
-				String oldSnapshotFilename = fn + "-" + sdf.format(snapshotFile.lastModified());
+				String oldSnapshotFilename = fn + ";" + sdf.format(snapshotFile.lastModified());
 				File oldSnapshotFile = new File(oldSnapshotFilename);
 				snapshotFile.renameTo(oldSnapshotFile);
 				snapshotFile = new File(fn);
@@ -668,13 +762,14 @@ public class Memory {
 	 */
 	
 	public static int initialInstanceOf(int classPointer) {
-		int oop = oopMarkerBit;
-		while (oop < 65536) {
-			OTEntry e = objectTable[oop];
-			if (!e.freeEntry() && e.count() != 0 && e.getClassOOP() == classPointer) {
-				return oop;
+		for (int lop = 0; lop < linearObjectTable.length; lop++) {
+			OTEntry e = linearObjectTable[lop];
+			if (e.isSmallInt()) {
+				break; // all true objects were seen
 			}
-			oop += 2;
+			if (!e.freeEntry() && e.count() != 0 && e.getClassOOP() == classPointer) {
+				return e.objectPointer();
+			}
 		}
 		return Well.known().NilPointer;
 	}
@@ -682,13 +777,14 @@ public class Memory {
 	public static int instanceAfter(int objectPointer) {
 		OTEntry obj = objectTable[objectPointer];
 		int classPointer = obj.getClassOOP();
-		int oop = objectPointer + 2;
-		while (oop < 65536) {
-			OTEntry e = objectTable[oop];
-			if (!e.freeEntry() && e.count() != 0 && e.getClassOOP() == classPointer) {
-				return oop;
+		for (int lop = obj.linearObjectPointer() + 1; lop < linearObjectTable.length; lop++) {
+			OTEntry e = linearObjectTable[lop];
+			if (e.isSmallInt()) {
+				break; // all true objects were seen
 			}
-			oop += 2;
+			if (!e.freeEntry() && e.count() != 0 && e.getClassOOP() == classPointer) {
+				return e.objectPointer();
+			}
 		}
 		return Well.known().NilPointer;
 	}
@@ -726,23 +822,32 @@ public class Memory {
 	 */
 	
 	public static int integerValueOf(int objectPointer) {
-		return ((short)objectPointer) >> 1;
+		return ot(objectPointer).intValue();
 	}
 	
 	public static int integerObjectOf(int value) {
-		return ((value & 0x7FFF) << 1) | smallIntMarkerBit;
+		if (isStretch) {
+			if (value >= -8192 && value <= 8191) {
+				return (value & 0x3FFF) << 2;
+			}
+			throw new RuntimeException("integerObjectOf(" + value + ") => value of of range for strech virtual image");
+		}
+		return ((value & 0x7FFF) << 1) | 1;
 	}
 	
 	public static boolean isIntegerObject(int objectPointer) {
-		return ((objectPointer & 1) != oopMarkerBit);
+		return ot(objectPointer).isSmallInt();
 	}
 	
 	public static boolean isIntegerValue(int value) {
+		if (isStretch) {
+			return (value >= -8192 && value <= 8191);
+		}
 		return (value >= -16384 && value <= 16383);
 	}
 	
 	/* **
-	 * ********* additional interace methods (not in Bluebook ObjectMemory interface)
+	 * ********* additional interface methods (not in Bluebook ObjectMemory interface)
 	 * **/
 	
 	public static int getUsedHeapWords() {
@@ -777,19 +882,72 @@ public class Memory {
 		return processorOop;
 	}
 	
+	// attention: this returns a true (Java) integer!
 	public static int objectPointerAsOop(int pointer) {
-		int oopValue = pointer & 0xFFFE;
-		if (oopMarkerBit == 0) { oopValue |= 1; }
-		return oopValue;
+		if (isStretch) {
+			return ot(pointer).linearObjectPointer();
+		} else {
+			return pointer >> 1;
+		}
+// ** this returns a SmallInteger-pointer: (works only for Bluebook)
+//		int oopValue = pointer & 0xFFFE;
+//		if (oopMarkerBit == 0) { oopValue |= 1; }
+//		return oopValue;
 	}
 	
+	// attention: this expects a true (Java) integer!
 	public static int oopAsObjectPointer(int oopValue) {
-		return (oopValue & 0xFFFE) | oopMarkerBit;
+		if (oopValue < 0 || oopValue >= linearObjectTable.length) {
+			throw new RuntimeException("oopAsObjectPointer(" + oopValue + ") => oopValue outof range");
+		}
+		if (isStretch) {
+			return linearObjectTable[oopValue].objectPointer(); // symmetric to objectPointerAsOop() !!!
+		} else {
+			return oopValue << 1;
+		}
+// ** this expects an SmallInteger-pointer:
+//		return (oopValue & 0xFFFE) | oopMarkerBit;
 	}
 	
 	public static boolean hasObject(int oop) {
 		OTEntry e = ot(oop);
 		return e.isObject() && !e.freeEntry();
+	}
+	
+	/* **
+	 * ********* specifics for DV6
+	 * **/
+	
+	public static int getNextOwnerOf(int ofPointer, int afterPointer) {
+		OTEntry after = ot(afterPointer);
+		for (int lop = after.linearObjectPointer() + 1; lop < linearObjectTable.length; lop++) {
+			// get the current candidate object
+			OTEntry cand = linearObjectTable[lop];
+			if (!cand.isObject()) {
+				break; // no more true objects
+			}
+			
+			// find the number of object references in the object
+			int refsCount = 0;
+			if (cand.pointerFields()) {
+				refsCount = cand.getWordLength();
+			} else if (cand.getClassOOP() == Well.known().ClassCompiledMethodPointer) {
+				int headerOop = cand.fetchWordAt(Well.known().HeaderIndex);
+				int header = integerValueOf(headerOop);
+				int literalCount = header & 0x003F; // lower 6 bits
+				refsCount = literalCount + Well.known().LiteralStartIndex;
+			}
+			
+			// check if the candidate references 'ofPointer'
+			for (int i = 0; i < refsCount; i++) {
+				if (cand.fetchPointerAt(i) == ofPointer) {
+					return cand.objectPointer();
+				}
+			}
+		}
+		
+		// no object pointing at 'ofPointer' found
+		return Well.known().NilPointer;
 	}
 	
 	/* **
@@ -842,7 +1000,7 @@ public class Memory {
 		} else {
 			// too large for a free-list: free the object and leave its heap space for later compaction
 			e.free();
-			noteFreeOop(e.objectPointer());
+			noteFreeLop(e.linearObjectPointer());
 		}
 		 
 		// manage global counter
@@ -850,9 +1008,9 @@ public class Memory {
 	}
 	
 	/* package-access */
-	static void noteFreeOop(int oop) {
-		if (oop < lowestFreeOop) {
-			lowestFreeOop = oop;
+	static void noteFreeLop(int lop) {
+		if (lop < lowestFreeLop) {
+			lowestFreeLop = lop;
 		}
 	}
 	
@@ -874,7 +1032,7 @@ public class Memory {
 			int nextOopInSize = e.dequeueFromFreeList(classOop, pointerFields, oddLength);
 			freesize2oop.put(wordSize, nextOopInSize);
 			initObjectFields(e);
-			logf("**** allocated object 0x%04X from freelist ( netWordSize = %d , class = 0x%04X (%s) )\n", e.objectPointer(), netWordSize, classOop, getClassName(classOop));
+			logf("\n**** allocated object 0x%04X from freelist ( netWordSize = %d , class = 0x%04X (%s) )", e.objectPointer(), netWordSize, classOop, getClassName(classOop));
 			return e.objectPointer();
 		}
 		
@@ -901,7 +1059,7 @@ public class Memory {
 		heapMemory[objHeapSpace+1] = (short)classOop;
 		e.allocate(objHeapSpace, pointerFields, oddLength); // (needs the length field to already have been set)
 		initObjectFields(e);
-		logf("**** allocated object 0x%04X from heap ( netWordSize = %d , class = 0x%04X (%s) )\n", e.objectPointer(), netWordSize, classOop, getClassName(classOop));
+		logf("\n**** allocated object 0x%04X from heap ( netWordSize = %d , class = 0x%04X (%s) )", e.objectPointer(), netWordSize, classOop, getClassName(classOop));
 		
 		// done
 		return e.objectPointer();
@@ -920,25 +1078,25 @@ public class Memory {
 	}
 	
 	private static OTObjectEntry findFreeOop(boolean allowCompaction) {
-		// 1st try: if no free oop is found below otLimit, do a compaction and then retry
-		// 2nd try: scan the whole objectTable after compaction
-		int oop = lowestFreeOop;
-		while (oop < objectTable.length) {
-			if (allowCompaction && oop > otLimit) {
-				gc("oop > otLimit during findFreeOop()");
+		// 1st try: if no free object is found below lotLimit, do a compaction and then retry
+		// 2nd try: scan the whole linearObjectTable after compaction
+		int lop = lowestFreeLop;
+		while (lop < linearObjectTable.length) {
+			if (allowCompaction && lop > lotLimit) {
+				gc("lop > lotLimit during findFreeOop()");
 				return findFreeOop(false);
 			}
-			OTObjectEntry e = (OTObjectEntry)objectTable[oop];
+			OTObjectEntry e = (OTObjectEntry)linearObjectTable[lop];
 			if (e.freeEntry()) {
-				lowestFreeOop = oop;
+				lowestFreeLop = lop;
 				return e;
 			}
-			oop += 2;
+			lop++;
 		}
 		
-		// last try: attempt a compaction before going into outOfMemory(objectTable)
+		// last try: attempt a garbage collection before going into outOfMemory(objectTable)
 		if (allowCompaction) {
-			gc("no oop found during findFreeOop()");
+			gc("no free object found during findFreeOop()");
 			return findFreeOop(false);
 		}
 		throw MisuseHandler.outOfMemory("objectTable");
@@ -952,19 +1110,25 @@ public class Memory {
 	}
 	
 	// mark & sweep & compacting garbage collector
-	// returns the last oop in use
+	// returns the last lop in use
 	public static int gc(String reason) {
+		return gc(reason, -1, -1, -1);
+	}
+	
+	// mark & sweep & compacting garbage collector with special DV6 extension for purging identity dictionaries
+	// returns the last lop in use
+	public static int gc(String reason, int dictClassPointer, int dictArrayPointer, int replacementKeyPointer) {
 		gclogf("\n-- gc( run: %d ,  reason: %s )\n", gcCount,  reason);
 		gcCount++;
 		long startNano = System.nanoTime();
 		
-		// sanity check: verify that no reachable object has been released with reference-counting (log only!)
-		traverseObjectsFromRoots((e,g) -> {
-			if (e.count() < 1 || e.freeEntry()) {
-				gclogf("-- gc() err: reachable free object: %s\n", e.toString());
-			}
-			return e.setUsed(g);
-		});
+//		// sanity check: verify that no reachable object has been released with reference-counting (log only!)
+//		traverseObjectsFromRoots((e,g) -> {
+//			if (e.count() < 1 || e.freeEntry()) {
+//				gclogf("-- gc() err: reachable free object: %s\n", e.toString());
+//			}
+//			return e.setUsed(g);
+//		});
 		
 		// drop all enqueued free objects: this becomes the unused heap space to be compacted away
 		gclogf("-- gc(): dropping free-lists\n");
@@ -977,44 +1141,119 @@ public class Memory {
 				victim = e.dropFromFreeList();
 				count++;
 			}
-			gclogf("-- gc(): free-list for size = %d => %d entries freed\n", size, count);
+			gcvlogf("-- gc(): free-list for size = %d => %d entries freed\n", size, count);
 		}
 		freesize2oop.clear();
+		
+		// object-GC: special DV6 extension - prepare identity dictionaries
+		// (the idea is to remove the non-empty keys from the dictionaries so they
+		// won't be seen by the gc mark-phase, and collect the restore-lamda
+		// procedures that will either free the key and value or restore the key,
+		// depending on the outcome of the park phase (i.e. if they are also used otherwise))
+		List<Consumer<Integer>> restorers = new ArrayList<>(); // Consumer argument is: gc generation for existence
+		if (dictClassPointer > 0 && dictArrayPointer > 0 && replacementKeyPointer > 0
+				&& "IdentityDictionary".equals(getClassName(dictClassPointer))) {
+			OTEntry dictArray = Memory.ot(dictArrayPointer);
+			for (int dictArrayIdx = 0; dictArrayIdx < dictArray.getWordLength(); dictArrayIdx++) {
+				OTEntry dict = ot(dictArray.fetchPointerAt(dictArrayIdx));
+				if (dict.getClassOOP() != dictClassPointer) {
+					continue;
+				}
+				OTEntry values = ot(dict.fetchPointerAt(1));
+				for (int dictIdx = 2; dictIdx < dict.getWordLength(); dictIdx++) {
+					// skip unused key entries
+					int keyPointer = dict.fetchWordAt(dictIdx);
+					if (keyPointer == Well.known().NilPointer || keyPointer == replacementKeyPointer) {
+						continue;
+					}
+					
+					// create restorer/dropper lambda
+					int dictKeyPos = dictIdx;
+					OTObjectEntry key = (OTObjectEntry)ot(keyPointer);
+					String keyString = key.toString();
+					OTObjectEntry value = (OTObjectEntry)ot(values.fetchWordAt(dictIdx - 2));
+					String valueString = value.toString();
+					restorers.add( g -> {
+						if (key.isUsed(g)) {
+							// keys also used elsewhere
+							System.out.printf("== restoring key: %s\n", keyString);
+							dict.storeWordAt(dictKeyPos, keyPointer);
+						} else {
+							// key only used in this dictionary => free
+							if (!key.freeEntry()) {
+								System.out.printf("== freeing key: %s\n", keyString);
+								key.free();
+								noteFreeLop(key.linearObjectPointer());
+							} else {
+								System.out.printf("== already freed key: %s\n", keyString);
+							}
+							if (value.count() == 1) {
+								System.out.printf("==   -> freeing value: %s\n", valueString);
+								values.storeWordAt(dictKeyPos - 2, Well.known().NilPointer);
+								value.free();
+								noteFreeLop(value.linearObjectPointer());
+							} else {
+								System.out.printf("==   -> removed value from dictionary: %s\n", valueString);
+								values.storePointerAt(dictKeyPos - 2, Well.known().NilPointer);
+							}
+						}
+					});
+					System.out.printf("== removing key: %s\n", keyString);
+					System.out.printf("==   -> value: %s\n", valueString);
+					dict.storeWordAt(dictKeyPos, replacementKeyPointer);
+				}
+			}
+		}
 		
 		// object-GC: mark phase
 		gclogf("-- gc(): mark&sweep garbage collection\n");
 		int markerGeneration = traverseObjectsFromRoots( (e,g) -> e.setUsed(g) );
 		
 		// object-GC: sweep phase
+		int lopLimit = linearObjectTable.length;
 		int freedCount = 0;
-		for (int ptr = Well.known().NilPointer; ptr < objectTable.length; ptr += 2) {
-			OTObjectEntry e = (OTObjectEntry)objectTable[ptr];
-			if (e.freeEntry()) { continue; }
-			if (!e.isUsed(markerGeneration)) {
-				gcvlogf("-- gc()... freed: %s\n", e.toString());
-				e.free();
-				noteFreeOop(ptr);
+		freeObjectCount = 0;
+		for (int lop = 1 /* ~ nil */; lop < linearObjectTable.length; lop++) {
+			OTEntry le = linearObjectTable[lop];
+			if (le.isSmallInt()) {
+				lopLimit = le.linearObjectPointer();
+				break; // the linearObjectTable has all objects first, then all small-ints => stop at first small-int
+			}
+			if (le.freeEntry()) {
+				freeObjectCount++;
+				continue;
+			}
+			if (!le.isUsed(markerGeneration)) {
+				gcvlogf("-- gc()... freed: %s\n", le.toString());
+				((OTObjectEntry)le).free();
+				noteFreeLop(le.linearObjectPointer());
 				freedCount++;
+				freeObjectCount++;
 			}
 		}
+		
+		// object-GC: special DV6 extension - restore pointers or replace obsolete keys
+		for (Consumer<Integer> r : restorers) {
+			r.accept(markerGeneration);
+		}
+		
 		gclogf("-- gc(): freedCount: %d\n", freedCount);
 		
 		// heap compaction: objects to process for heap compaction
-		int oop = Well.known().NilPointer;
-		int oopLimit = objectTable.length; // ?? otLimit ??
-		int usedOops = 1;
+		int lop = 1; // nil
+		int usedObjects = 1;
 		OTObjectEntry lastUsedObject = null;
 		
 		// move heap words of active objects
 		gclogf("-- gc(): compacting heap\n");
 		int dest = 0; // next location in compacted heap
-		while(oop < oopLimit) {
+		while(lop < lopLimit) {
 			// get the object and relevant data
-			OTObjectEntry e = (OTObjectEntry)objectTable[oop];
+			OTObjectEntry e = (OTObjectEntry)linearObjectTable[lop];
 			int currFrom = e.address();
 			int currCount = e.getSize();
 			e.relocatedInHeap(dest);
-			usedOops++;
+			usedObjects++;
 			lastUsedObject = e;
 			
 			// copy heap content of the object
@@ -1025,16 +1264,16 @@ public class Memory {
 			dest += currCount;
 			
 			// find next valid object-table entry
-			oop += 2;
-			while(oop < oopLimit && ((OTObjectEntry)objectTable[oop]).freeEntry()) {
-				oop += 2;
+			lop++;;
+			while(lop < lopLimit && linearObjectTable[lop].freeEntry()) {
+				lop++;
 			}
 		}
 		
-		// recompute otLimit
-		int maxOop = lastUsedObject.objectPointer();
-		int nextOtLimitBoundary = Math.min(objectTable.length, (((maxOop + (OTLIMIT_LEAPS * 2) - 1) / OTLIMIT_LEAPS)) * OTLIMIT_LEAPS);
-		otLimit = nextOtLimitBoundary;
+		// recompute lotLimit
+		int maxLop = lastUsedObject.linearObjectPointer();
+		int nextLotLimitBoundary = Math.min(linearObjectTable.length, (((maxLop + (LOTLIMIT_LEAPS * 2) - 1) / LOTLIMIT_LEAPS)) * LOTLIMIT_LEAPS);
+		lotLimit = nextLotLimitBoundary;
 		
 		// set new heap memory markers
 		heapUsed = dest;
@@ -1049,15 +1288,16 @@ public class Memory {
 		// do some logging
 		long stopNano = System.nanoTime();
 		gclogf("-- gc(): runtime %d nanoSecs\n", stopNano - startNano);
-		gclogf("-- gc(): oopsUsed = %d, heapUsed = %d words, heapRemaining = %d words, heapLimit = 0x%06X\n", usedOops, heapUsed, heapRemaining, heapLimit);
-		gclogf("-- gc(): maxOop = 0x%04X , nextOtLimitBoundary = 0x%04X => distance: %d\n", maxOop, nextOtLimitBoundary, nextOtLimitBoundary - maxOop);
+		gclogf("-- gc(): oopsUsed = %d, heapUsed = %d words, heapRemaining = %d words, heapLimit = 0x%06X\n", usedObjects, heapUsed, heapRemaining, heapLimit);
+		gclogf("-- gc(): lopLimit = 0x%04X (%d), freeObjectCount = %d\n", lopLimit, lopLimit, freeObjectCount);
+		gclogf("-- gc(): maxLop = 0x%04X , nextLotLimitBoundary = 0x%04X => distance: %d\n", maxLop, nextLotLimitBoundary, nextLotLimitBoundary - maxLop);
 		
 		// do notification
 		if (gcNotificationSink != null) {
 			gcNotificationSink.accept(gcCount);
 		}
 		
-		return maxOop;
+		return maxLop;
 	}
 	
 	
@@ -1148,7 +1388,7 @@ public class Memory {
 		if (symbolCache.containsKey(symbolOop)) {
 			return symbolCache.get(symbolOop);
 		}
-		OTEntry symbol = Memory.ot(symbolOop);
+		OTEntry symbol = ot(symbolOop);
 		if (symbol.getClassOOP() != Well.known().ClassSymbolPointer) {
 			return "";
 		}
@@ -1158,12 +1398,35 @@ public class Memory {
 	}
 	
 	public static String getClassName(int classPointer) {
-		int symbolPointer = Memory.fetchPointer(6, classPointer);
+		if (fetchWordLengthOf(classPointer) < 7) { return "?"; }
+		int symbolPointer = fetchPointer(6, classPointer);
 		String className = getSymbolText(symbolPointer);
 		return className;
 	}
 	
 	public static String getClassNameOf(int objectPointer) {
-		return getClassName(Memory.ot(objectPointer).getClassOOP());
+		return getClassName(ot(objectPointer).getClassOOP());
 	}
+	
+	public static String getStringValue(int stringPointer) {
+		OTEntry string = ot(stringPointer);
+		if (string.getClassOOP() != Well.known().ClassStringPointer) {
+			System.out.printf("\n** getStringValue( 0x%04X ) : not a string returning empty string", stringPointer);
+			return "";
+		}
+		return getStringValue(string);
+	}
+	
+	public static int createStringObject(String value) {
+		byte[] bytes = value.getBytes();
+		int wordLen = (bytes.length + 1) / 2;
+		boolean oddLen = ((bytes.length & 1) == 1);
+		int stringPointer = allocateObject(wordLen, Well.known().ClassStringPointer, false, oddLen);
+		OTEntry string = ot(stringPointer);
+		for (int i = 0; i < bytes.length; i++) {
+			string.storeByteAt(i, bytes[i]);
+		}
+		return stringPointer;
+	}
+	
 }

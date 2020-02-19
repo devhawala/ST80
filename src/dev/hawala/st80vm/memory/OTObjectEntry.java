@@ -49,14 +49,16 @@ import dev.hawala.st80vm.Config;
 	private int address; // (segment.location)
 	
 	private final int objectPointer;
+	private final int linearObjectPointer;
 	
 	private int fieldWordsLimit;
 	private int fieldBytesLimit;
 	
 	private int gcGeneration = -1;
 	
-	public OTObjectEntry(int oop) {
+	public OTObjectEntry(int oop, int lop) {
 		this.objectPointer = oop;
+		this.linearObjectPointer = lop;
 		this.free();
 	}
 	
@@ -91,6 +93,11 @@ import dev.hawala.st80vm.Config;
 	@Override
 	public int objectPointer() {
 		return this.objectPointer;
+	}
+	
+	@Override
+	public int linearObjectPointer() {
+		return this.linearObjectPointer;
 	}
 	
 	@Override
@@ -293,8 +300,22 @@ import dev.hawala.st80vm.Config;
 		String memInfo = (this.freeEntry && this.address == 0)
 				? " FREE"
 				: String.format(" mem( size=%3d , class=0x%04X )", this.getSize(), this.getClassOOP());
+		int classPointer = this.getClassOOP();
+		String className = Memory.getClassName(classPointer);
+		String dataInfo = "";
+		if (className.isEmpty()) {
+			className = "Class: " + Memory.getClassName(this.objectPointer);
+		} else if (classPointer == Well.known().ClassSymbolPointer) {
+			dataInfo = "'" + Memory.getSymbolText(this.objectPointer) + "'";
+		} else if (classPointer == Well.known().ClassStringPointer) {
+			dataInfo = "'" + Memory.getStringValue(this.objectPointer) + "'";
+		} else {
+			for (int i = 0; i < Math.min(16, this.fieldWordsLimit); i++) {
+				dataInfo = String.format("%s %04X", dataInfo, this.fetchWordAt(i));
+			}
+		}
 		return String.format(
-				"Object[ 0x%04X%s count=%3d address=0x%06X%s%s%s ] (%s)",
+				"Object[ 0x%04X%s count=%3d address=0x%06X%s%s%s ] (%s)%s",
 				this.objectPointer,
 				memInfo,
 				this.count,
@@ -302,7 +323,8 @@ import dev.hawala.st80vm.Config;
 				(this.freeEntry ? " free" : "     "),
 				(this.pointerFields ? " ptrFlds" : "        "),
 				(this.oddLength ? " oddLen" : "       "),
-				Memory.getClassNameOf(this.objectPointer)
+				className,
+				dataInfo
 				);
 	}
 	
@@ -337,7 +359,7 @@ import dev.hawala.st80vm.Config;
 		int nextOop = this.nextObjectPointerInFreeList;
 		this.nextObjectPointerInFreeList = -1;
 		this.free(); // reset to true free ObjectTable entry
-		Memory.noteFreeOop(this.objectPointer);
+		Memory.noteFreeLop(this.linearObjectPointer);
 		return nextOop;
 	}
 	
@@ -352,13 +374,13 @@ import dev.hawala.st80vm.Config;
 	/* package-access */
 	static void suspendFreeingObjects() {
 		freeObjectsSuspended = true;
-		logf("**** freeing object suspended\n");
+		logf("\n**** freeing object suspended");
 	}
 	
 	/* package-access */
 	static void resumeFreeingObjects() {
 		if (freeObjectsSuspended) {
-			logf("**** freeing object resumed, in suspended list: %d\n", candidatesForRelease.size());
+			logf("\n**** freeing object resumed, in suspended list: %d", candidatesForRelease.size());
 			freeObjectsSuspended = false;
 			for (OTObjectEntry e : candidatesForRelease) {
 				if (e.count == 0) {
@@ -375,7 +397,7 @@ import dev.hawala.st80vm.Config;
 				candidatesForRelease.add(e);
 			}
 		} else {
-			logf("**** freeing object 0x%04X , class = 0x%04X (%s)\n", e.objectPointer(), e.getClassOOP(), Memory.getClassName(e.getClassOOP()));
+			logf("\n**** freeing object 0x%04X , class = 0x%04X (%s)", e.objectPointer(), e.getClassOOP(), Memory.getClassName(e.getClassOOP()));
 			Memory.releaseObject(e);
 		}
 	}

@@ -163,8 +163,8 @@ public class Storage {
 	public static final Primitive primitiveAsOop = () -> { w("primitiveAsOop");
 		int thisReceiver = popStack();
 		if (success(!Memory.isIntegerObject(thisReceiver))) {
-			int newOop = Memory.objectPointerAsOop(thisReceiver);
-			push(newOop);
+			int oopValue = Memory.objectPointerAsOop(thisReceiver);
+			push(Interpreter.positive16BitIntegerFor(oopValue));
 		} else {
 			unPop(1);
 		}
@@ -173,9 +173,14 @@ public class Storage {
 	
 	public static final Primitive primitiveAsObject = () -> { w("primitiveAsObject");
 		int thisReceiver = popStack();
-		int newPointer = Memory.oopAsObjectPointer(thisReceiver);
-		if (success(Memory.hasObject(newPointer))) {
-			push(newPointer);
+		int oopValue = Interpreter.positive16BitValueOf(thisReceiver);
+		if (success()) {
+			int newPointer = Memory.oopAsObjectPointer(oopValue);
+			if (success(Memory.hasObject(newPointer))) {
+				push(newPointer);
+			} else {
+				unPop(1);
+			}
 		} else {
 			unPop(1);
 		}

@@ -32,6 +32,7 @@ import java.awt.EventQueue;
 import java.awt.Font;
 import java.awt.event.WindowEvent;
 import java.awt.event.WindowListener;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintStream;
 
@@ -42,6 +43,9 @@ import javax.swing.JOptionPane;
 import dev.hawala.st80vm.alto.AltoDisk;
 import dev.hawala.st80vm.alto.AltoVmFilesHandler;
 import dev.hawala.st80vm.alto.Disk.InvalidDiskException;
+import dev.hawala.st80vm.d11xx.Dv6Specifics;
+import dev.hawala.st80vm.d11xx.TajoDisk;
+import dev.hawala.st80vm.d11xx.TajoVmFilesHandler;
 import dev.hawala.st80vm.interpreter.Interpreter;
 import dev.hawala.st80vm.interpreter.QuitSignal;
 import dev.hawala.st80vm.memory.Memory;
@@ -67,7 +71,7 @@ public class ST80 {
 	private static class ImageOnlyVmFilesHandler implements iVmFilesHandler {
 		
 		public ImageOnlyVmFilesHandler(String fn) throws IOException {
-			Memory.loadVirtualImage(fn, false);
+			Memory.loadVirtualImage(fn);
 		}
 
 		@Override
@@ -162,6 +166,9 @@ public class ST80 {
 		String imageFile = null;
 		boolean haveStatusline = false;
 		Integer timeAdjustMinutes = null;
+		int tzOffsetMinutes = 60; // CET ~ Berlin
+		int dstFirstDay = 31 + 28 + 31 - 6; // .................................... DST begins on sunday at or before 31.03.
+		int dstLastDay = 31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 - 6; // .. DST ends on sunday at or before 31.10. 
 		boolean statsAtEnd = false;
 		
 		for (String arg : args) {
@@ -177,6 +184,41 @@ public class ST80 {
 				}
 			} else if ("--stats".equals(lcArg)) {
 				statsAtEnd = true;
+			} else if (lcArg.startsWith("--tz:")) {
+				String[] parts = lcArg.substring(5).split(":");
+				if (parts.length != 1 && parts.length != 3) {
+					System.out.printf("warning: ignoring invalid option with argument count '%s'\n", arg);
+				} else {
+					boolean valid = true;
+					int offset = tzOffsetMinutes;
+					int firstDay = dstFirstDay;
+					int lastDay = dstLastDay;
+					try {
+						offset = Integer.valueOf(parts[0]);
+						valid &= offset >= -720 && offset <= 780;
+					} catch(NumberFormatException nfe) {
+						valid = false;
+					}
+					
+					if (parts.length > 1) {
+						try {
+							firstDay = Integer.valueOf(parts[1]);
+							lastDay = Integer.valueOf(parts[2]);
+							valid &= firstDay >= 0 && firstDay <= 366;
+							valid &= lastDay >= 0 && lastDay <= 366;
+						} catch(NumberFormatException nfe) {
+							valid = false;
+						}
+					}
+					
+					if (valid) {
+						tzOffsetMinutes = offset;
+						dstFirstDay = firstDay;
+						dstLastDay = lastDay;
+					} else {
+						System.out.printf("warning: ignoring option with invalid values '%s'!\n", arg);
+					}
+				}
 			} else if (arg.startsWith("--")) {
 				System.out.printf("warning: ignoring invalid option '%s'\n", arg);
 			} else if (imageFile == null) {
@@ -195,12 +237,22 @@ public class ST80 {
 		 * create the file set handler for the given image file, loading the Smalltalk image and
 		 * possibly the associated Alto disk, and register it to the relevant primitive implementations
 		 */
-		iVmFilesHandler vmFiles = AltoVmFilesHandler.forImageFile(imageFile);
+		StringBuilder messages = new StringBuilder();
+		iVmFilesHandler vmFiles = AltoVmFilesHandler.forImageFile(imageFile, messages);
 		if (vmFiles == null) {
-			vmFiles = new ImageOnlyVmFilesHandler(imageFile); 
+			vmFiles = TajoVmFilesHandler.forImageFile(imageFile, messages);
+		}
+		if (vmFiles == null) {
+			System.out.println(messages.toString());
+			try {
+				vmFiles = new ImageOnlyVmFilesHandler(imageFile);
+			} catch(FileNotFoundException e) {
+				return; // a simple file not found has already been issued by the above handlers...
+			}
 		}
 		InputOutput.setVmFilesHandler(vmFiles);
 		AltoDisk.setVmFilesHandler(vmFiles);
+		TajoDisk.setVmFilesHandler(vmFiles);
 		
 		/*
 		 * setup Smalltalk time (for correcting the hard-coded Xerox-PARC timezone)
@@ -208,6 +260,7 @@ public class ST80 {
 		if (timeAdjustMinutes != null) {
 			InputOutput.setTimeAdjustmentMinutes(timeAdjustMinutes);
 		}
+		Dv6Specifics.setLocalTimeParameters(tzOffsetMinutes, dstFirstDay, dstLastDay);
 		
 		/*
 		 * build a rather simple Java-Swing UI
@@ -231,7 +284,7 @@ public class ST80 {
 		
 		// add the status line 
 		if (haveStatusline) {
-			JLabel statusLine = new JLabel(" Mesa Engine not running");
+			JLabel statusLine = new JLabel(" ST80 Engine not running");
 			statusLine.setFont(new Font("Monospaced", Font.BOLD, 12));
 			mainFrame.getContentPane().add(statusLine, BorderLayout.SOUTH);
 			Interpreter.setStatusConsumer( s -> statusLine.setText(s) );
@@ -264,8 +317,10 @@ public class ST80 {
 			System.exit(0);
 		} catch(Exception e) {
 			vmFiles.saveDiskChanges(System.out);
+			try { Thread.sleep(100); } catch (InterruptedException e1) { }
 			e.printStackTrace();
 			if (statsAtEnd) {
+				try { Thread.sleep(100); } catch (InterruptedException e1) { }
 				Interpreter.printStats(System.out);
 			}
 			mainFrame.setVisible(false);

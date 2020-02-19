@@ -36,10 +36,11 @@ package dev.hawala.st80vm.memory;
  * may theoretically vary for different versions of the distribution image delivered
  * by Xerox.
  * <br/>
- * Moreover, this singleton is prepared for situations where a deviating identification
+ * Moreover, this singleton handles the situations where a deviating identification
  * scheme for SmallInteger OOPs is used in an image: the Bluebook defines SmallInteger OOPs
- * as having the least significant bit 1, but a fast analysis of the DV6 image snapshot for
- * Daybreak/Pilot suggests that this bit is 0 there...
+ * as having the least significant bit 1, but the DV6 image snapshot for Daybreak/Pilot
+ * uses the so-called stretch mode, where SmallInteger OOPs have the least 2 significant
+ * bits 0 and allowing for 48k objects instead of 32k by the Bluebook.
  * </p>
  * <p>
  * The idiom for getting one of the constants is: {@code Well.known().}<i>name</i>.
@@ -198,8 +199,8 @@ public class Well {
 	 * non-constant well known values
 	 */
 	
-	private static int oopMarkerBit = -1;
-	private static int sClassSymbolPointer;
+	private static boolean isStretch;
+	private static int sClassSymbolPointer = -1;
 	private static int sClassMetaclassPointer;
 	private static int sClassCompiledMethodPointer;
 	private static int sClassSmallIntegerPointer;
@@ -211,7 +212,7 @@ public class Well {
 	
 	/* package-access */
 	static void initialize(
-			int oopBitValue,
+			boolean stretch,
 			int oopClassSymbolPointer,
 			int oopClassMetaclassPointer,
 			int oopClassCompiledMethodPointer,
@@ -221,7 +222,7 @@ public class Well {
 			int oopClassSemaphorePointer,
 			int oopClassAssociationPointer,
 			int oopYieldSelector) {
-		oopMarkerBit = oopBitValue & 0x0001;
+		isStretch = stretch;
 		sClassSymbolPointer = oopClassSymbolPointer;
 		sClassMetaclassPointer = oopClassMetaclassPointer;
 		sClassCompiledMethodPointer = oopClassCompiledMethodPointer;
@@ -237,7 +238,7 @@ public class Well {
 	
 	public static Well known() {
 		if (singleton == null) {
-			if (oopMarkerBit < 0) {
+			if (sClassSymbolPointer < 0) {
 				throw new IllegalStateException("Well-known values not properly initialized");
 			}
 			singleton = new Well();
@@ -246,11 +247,19 @@ public class Well {
 	}
 	
 	private Well() {
-		this.MinusOnePointer = 0xFFFF - oopMarkerBit;
-		this.ZeroPointer = 1 - oopMarkerBit;
-		this.OnePointer = 3 - oopMarkerBit;
-		this.TwoPointer = 5 - oopMarkerBit;
+		if (isStretch) {
+			this.MinusOnePointer = 0xFFFC;
+			this.ZeroPointer = 0;
+			this.OnePointer = 4;
+			this.TwoPointer = 8;
+		} else {
+			this.MinusOnePointer = 0xFFFF;
+			this.ZeroPointer = 1;
+			this.OnePointer = 3;
+			this.TwoPointer = 5;
+		}
 		
+		int oopMarkerBit = (isStretch) ? 1 : 0;
 		this.NilPointer = 0x0002 + oopMarkerBit;
 		this.FalsePointer = 0x0004 + oopMarkerBit;
 		this.TruePointer = 0x0006 + oopMarkerBit;

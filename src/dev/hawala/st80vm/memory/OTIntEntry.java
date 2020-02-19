@@ -36,16 +36,23 @@ package dev.hawala.st80vm.memory;
 /*package-access*/ class OTIntEntry implements OTEntry {
 
 	private final int objectPointer;
+	private final int linearObjectPointer;
 	private final int value;
 	
-	OTIntEntry(int otIndex) {
+	OTIntEntry(int intValue, int otIndex, int lotIndex) {
 		this.objectPointer = otIndex;
-		this.value = ((short)otIndex) >> 1; // this should allow negative values
+		this.linearObjectPointer = lotIndex;
+		this.value = intValue;
 	}
 	
 	@Override
 	public int objectPointer() {
 		return this.objectPointer;
+	}
+	
+	@Override
+	public int linearObjectPointer() {
+		return this.linearObjectPointer;
 	}
 
 	@Override
