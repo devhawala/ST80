@@ -226,8 +226,8 @@ public class TajoFilesystem {
 			tajoParent = null;
 			osParent = volumeRoot;
 		} else {
-			tajoParent = locate(cmpSearchpath.get(0));
-			if (tajoParent == null) { // WHAT?
+			tajoParent = locate(tajoPath);
+			if (tajoParent == null) { // can happen if an absolute file path was given...
 				return null;
 			}
 			osParent = tajoParent.getOsFile();
@@ -327,6 +327,27 @@ public class TajoFilesystem {
 		};
 		
 		public boolean rename(String newName) {
+			// check for absolute newName
+			if (newName.startsWith("<>")) {
+				// get the path for the new name
+				int lastSep = newName.lastIndexOf('>');
+				String newNameLcPath = newName.substring(0, lastSep + 1).toLowerCase();
+				
+				// reject renaming if the path changes, as moving (as in Unix) is not supported for now...
+				if (this.parent == null) {
+					if (!"<>".equals(newNameLcPath)) {
+						return false;
+					}
+				} else {
+					if (!this.parent.getCmpAbsoluteFilename().equals(newNameLcPath)) {
+						return false;
+					}
+				}
+				
+				// get the new name
+				newName = newName.substring(lastSep + 1);
+			}
+			
 			// check that the new name does not exists
 			if (newName.contains(";")) { return false; }
 			if (newName.contains(">")) { return false; }

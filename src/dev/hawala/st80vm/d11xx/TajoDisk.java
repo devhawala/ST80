@@ -236,8 +236,7 @@ public class TajoDisk {
 		} else {
 			// rename failed...
 			logf(" ... rename failed");
-			unPop(argumentCount());
-			return primitiveFail();
+			return restoreAndFail();
 		}
 	}
 	
