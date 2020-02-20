@@ -619,6 +619,9 @@ The following files and documents available in the internet were useful for crea
 
 ### History
 
+- 2020-02-20 ...    
+  Fixes for a DV6-related bug when saving the content from a file list (lower pane via 'put')
+
 - 2020-02-19    
   new: added support for Smalltalk-80 DV6 for 1186 / 6085 workstation (Stretch object memory model)    
   bugfix: prevent divide by zero when creating the status line, crashing at startup on (very) fast machines    
