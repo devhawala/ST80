@@ -368,8 +368,12 @@ public class InputOutput {
 			}
 			logf("    +---------------------------------+\n");
 			displayPane.setCursor(cursorWords, hotspotX, hotspotY);
+			int oldCursorRealX = mouseX + cursorDisplacementX;
+			int oldCursorRealY = mouseY + cursorDisplacementY;
 			cursorDisplacementX = hotspotX;
 			cursorDisplacementY = hotspotY;
+			mouseX = oldCursorRealX - cursorDisplacementX;
+			mouseY = oldCursorRealY - cursorDisplacementY;
 			logf("--- new cursor, hotspot: ( %4d , %4d )\n", hotspotX, hotspotY);
 		}
 		
