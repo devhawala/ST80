@@ -3,7 +3,7 @@
 ST80 is a virtual machine for Smalltalk-80 as specified in the "Bluebook" (Smalltalk-80:
 the Language and its Implementation, see Bibliography) implemented in Java 8.
 
-The ST80 program allows to run 2 historical version of Smalltalk-80:
+The ST80 program allows to run some historical versions of Smalltalk-80:
 
 - the Smalltalk-80 Version 2 image of 1983 found at the archive.org website
   (see [Smalltalk-80](https://archive.org/details/smalltalk-80)). The archive found there seems
@@ -19,6 +19,13 @@ The ST80 program allows to run 2 historical version of Smalltalk-80:
   The Smalltalk-80 DV6 image uses a modified encoding scheme for object pointers called _Stretch_, which differs from
   the Bluebook specification for having more true objects in the live system (48k objects instead of 32k) at the expense of
   the number of SmallIntegers (16k instead of 32k).
+  
+- the Smalltalk-80 "The Analyst V1.2" distribution of 1987 found at Bitsavers
+  ([1186_The_Analyst_V1.2_Dec87](http://bitsavers.org/bits/Xerox/1186/1186_The_Analyst_V1.2_Dec87.zip)).
+  This is the _Analyst_ package installed in a DV6 Smalltalk-80 system, using the Stretch memory model but
+  extended with the _Large-Object-Oriented-Memory_ (LOOM) model. As ST80 does not support LOOM, the "type 5" image file
+  found in the distribution must be converted with an utility provided by ST80, producing a "type 1" DV6 Stretch
+  image file that ST80 can run (with not much free object table and heap memory left however).
 
 As the appearance dates of the Smalltalk-80 book series and the source code of Version 2 are all 1983 (the image file is from 1985,
 but this may be due to a Unix copy operation), the idea and challenge to "resurrect" this vintage
@@ -51,12 +58,13 @@ which is accessed by the relevant Smalltalk classes through simulated low-level 
 ST80 also includes an utility for creating, loading and writing Alto disk images, list the disk content
 and manipulating the disk like adding/renaming/deleting files.
 
-- the DV6 Smalltalk image uses the file system provided by XDE/Tajo, the Xerox Development Environment, running on an 1186
-workstation. ST80 provides a simple emulation of the XDE environment which maps the root volume of the Tajo filesystem to
-a base directory of the OS where ST80 runs, providing the basic facilities like search path and case insensitive filenames.
-Most of the larger set of "vendor-specific" primitives used by the DV6 version of Smalltalk-80 are implemented by ST80.
+- the DV6 Smalltalk image and the Analyst system built on top of it use the file system provided by XDE/Tajo, the Xerox
+Development Environment, running on an 1186 workstation. ST80 provides a simple emulation of the XDE environment which maps
+the root volume of the Tajo filesystem to a base directory of the OS where ST80 runs, providing the basic facilities like 
+search path and case insensitive filenames. Most of the larger set of "vendor-specific" primitives used by the DV6 version
+of Smalltalk-80 are implemented by ST80.
 
-In a nutshell, ST80 should allow to work "as expected" with the original images for the vintage Smalltalk-80 Version 2
+In a nutshell, ST80 should allow to work "as usual" with the original images for the vintage Smalltalk-80 Version 2
 and DV6 environments. The following screenshot shows the ST80 application window running the version 2 image with
 a companion Alto disk where the source code for the method shown in the browser (notice the variable name and comment) and
 the _SmalltalkBalloon_ picture were loaded from:
@@ -155,7 +163,7 @@ a new snapshot branch is necessary.
 
 #### Tajo environment for Smalltalk-80 DV6
 
-The Smalltalk-80 DV6 image cannot be used without an external file system. Although the disk connection for source
+A Smalltalk-80 DV6 image cannot be used without an external file system. Although the disk connection for source
 files preset in the image can be released (by setting `Disk`to `nil`), it will not be possible to create snapshots
 of the running Smalltalk system, as the file system is interfaced directly by Smalltalk for this. So ST80 supports
 a file system for a Smalltalk-80 DV6 image by default (if the files besides the image seem acceptable, see _Invoking ST80_
@@ -264,6 +272,8 @@ After unpacking the archive, the new subdirectory `sample-env` contains the foll
 
 - the subdirectory `1186-dv6` with the files for a sample Smalltalk-80 DV6 environment
 
+- the subdirectory `1186-analyst` with the files for a sample Smalltalk-80 Analyst-1.2 environment
+
 - the subdirectory `alto-v2` with the files for a sample Smalltalk-80 Version 2 environment
   
 - a set of scripts to simplify running ST80:
@@ -272,6 +282,9 @@ After unpacking the archive, the new subdirectory `sample-env` contains the foll
   
   -- `st80_dv6.cmd` resp. `st80_dv6.sh` to directly run the DV6 sample environment including all options,
      specifically for setting the western european time zone
+  
+  -- `st80_analyst.cmd` resp. `st80_analyst.sh` to directly run the Analyst-1.2 sample environment including
+     all options, specifically for setting the western european time zone
   
   -- `st80_v2.cmd` resp. `st80_v2.sh` to directly run the Version 2 sample environment including all options,
      specifically for adjusting the GMT time so Smalltalk shows western european time
@@ -302,6 +315,47 @@ For a quick start with Smalltalk-80 DV6, enter the `sample-env` directory and en
 `./st80_dv6.sh` in a command shell; the following window should open (here on Windows):
 
 ![ST80 in sample-env running the DV6 snapshot.im](st80x-snapshot-dv6-in-sample-env.png)
+
+#### Sample Smalltalk-80 DV6 + Analyst-V1.2 environment
+
+The directory `1186-analyst` contains the items for an emulated Tajo volume for the Smalltalk-80 Analyst-1.2 sample
+environment with the following items:
+
+- the subdirectory `system` with the files from the original floppy set:
+
+  -- `Analyst.im` (converted from the original image from the floppy disk set)
+  
+  -- `Analyst.im-original` (the original image file, not usable with ST80)
+  
+  -- `Analyst.changes` and `Analyst-DV6.initialChanges`
+  
+  -- `Analyst.sources` and `ST80-DV6.sources`
+  
+- the subdirectory `data` with the Analyst sample/demo files from the original floppy set
+  
+- the search path definition file `;searchpath.txt` for the Tajo volume, defining the following search path:    
+  `<>data`    
+  `<>system`
+
+Warning:    
+running the converted Analyst-1.2 image with ST80 is possible, but the memory conditions are tighter as for other Version 2
+or plain DV6, as ST80 supports "only" the Stretch memory model whereas the original image expects the additional LOOM feature.
+So out-of-memory problems are probable if using more advanced features of Analyst.
+
+For a quick start with Smalltalk-80 Analyst-1.2, enter the `sample-env` directory and enter `st80_analyst` resp.
+`./st80_analyst.sh` in a command shell; the ST80 screen should be all gray and moving the mouse will show the logon
+page. The following users are predefined:
+
+Name|Password
+----|--------
+analyst|analyst
+demo|demo
+system|system
+
+The following screenshot shows a session after logon as user `system` and opening a few Analyst specific tools
+(here on Linux):
+
+![Analyst-1.2 screenshot](st80x-snapshot-analyst-in-sample-env.png)
 
 
 #### Sample Smalltalk-80 Version 2 environment
@@ -334,9 +388,10 @@ For a quick start with Smalltalk-80 V2, enter the `sample-env` directory and ent
 
 ![ST80 in sample-env running the V2 snapshot.im](st80x-snapshot-in-sample-end.png)
 
-#### Shutting down either Smalltalk-80 versions
+#### Shutting down the Smalltalk-80 versions
 
-To shut down the Smalltalk environment, move the mouse to a free place on the gray background and press the middle mouse button.
+To shut down the Smalltalk-80 Version 2 or DV6 environments, move the mouse to a free place on the gray background and press the
+middle mouse button.
 The following command menu opens, select _Quit_ (probably already under the mouse position and therefore selected), which
 opens the follow-up menu for selecting how to leave the system (where _Save_ means to create a snapshot first):
 
@@ -344,6 +399,11 @@ opens the follow-up menu for selecting how to leave the system (where _Save_ mea
 
 For any further explorations, the "Orange book" (see the Bibliography section) will be useful to learn how to use and program with
 the Smalltalk-80 environment.
+
+The Analyst system has moved the same options to a submenu for the middle button (Smalltalk..Session) and also allows to
+leave the Analyst with "Log out":
+
+![Analyst leaving the system](st80x-leaving-the-system-analyst.png) 
 
 ### Running ST80
 
@@ -384,8 +444,8 @@ ST80 has the following program parameters:
 - `imagename[.im]` _required_    
   the name of the Smalltalk image to run. The extension `.im` of the image file can be omitted on the command line,
   the image file must however have this extension.    
-  Depending on the files besides the image, ST80 will decide which environment to use, checking first for an Alto and
-  then for a Tajo environment:
+  Depending on the files present besides the image, ST80 will decide which environment to use, checking first for an Alto
+  and then for a Tajo environment:
   
   -- If a file with extension `.dsk` matching the image filename is present, then an Alto environment is assumed
      where _imagename_ specifies the name of the name on the data file set, consisting of the required virtual memory
@@ -544,6 +604,24 @@ SysDir                                     20480 2020.02.01 15.41.35 2020.02.01 
 The subcommands are confirmed with the subcommand option processed, each possibly followed by message lines (error
 messages or the file lists for `--list` or `--scan`)
 
+### Converting _type 5_ images (DV6+LOOM) for ST80
+
+The Java main class
+
+```
+dev.hawala.st80vm.ConvertType5Image
+```
+
+in `st80vm.jar` allows to convert a _type 5_ image saved by the Smalltalk-80 DV6 for 1186 runtime (Stretch+LOOM memory
+model) to a _type 1_ image (Stretch only memory model) that can be used by ST80, provided the image content does
+not depend on the LOOM extension, that is fitting in the restricted 16 bit Stretch environment (less than 48k active objects,
+less than 1 MWords of used heap).
+
+This class is run as command line program and requires as 1st argument the name of the source image file. The optional 2nd
+argument is the name of the target image file. If omitted, the target file will be the source file name with `.converted.im`
+appended.
+
+
 ### Remarks and limitations
 
 - ST80 supports arbitrary sizes of the Smalltalk display (see below for the limits). An automatic resizing of
@@ -593,6 +671,10 @@ The following files and documents available in the internet were useful for crea
 - [1186_Smalltalk-80_DV6_Dec87.zip](http://bitsavers.org/bits/Xerox/1186/1186_Smalltalk-80_DV6_Dec87.zip)    
   the Smalltalk-80 installation floppy images for Xerox 1186/6085 workstations found at the [Bitsavers](http://bitsavers.org/) website
 
+- [1186_The_Analyst_V1.2_Dec87.zip](http://bitsavers.org/bits/Xerox/1186/1186_The_Analyst_V1.2_Dec87.zip)    
+  the Smalltalk-80 "The Analyst-V1.2" floppy images for Xerox 1186/6085 workstations found at the [Bitsavers](http://bitsavers.org/) website,    
+  documentation for "The Analyst V1.2" can be found at [Bitsavers](http://bitsavers.org/pdf/xerox/xsis/)
+
 - [Smalltalk-80: the Language and its Implementation](http://stephane.ducasse.free.fr/FreeBooks/BlueBook/Bluebook.pdf)   
   Adele Goldberg and David Robson, 1983   
   (the "Bluebook" repeatedly mentioned here and in the sources)
@@ -618,6 +700,10 @@ The following files and documents available in the internet were useful for crea
   the _Stretch_ mode modification to the Bluebook)
 
 ### History
+
+- 2020-10-29    
+  Added conversion of _type 5_ images (Stretch+LOOM memory model) to _type 1_ images (Stretch memory model)    
+  Added vendor-specific primitive dummies for 1186 allowing to run the (converted) Analyst-1.2 image
 
 - 2020-02-20 ... 2020-02-21    
   Fixes for a DV6-related bug when saving the content from a file list (lower pane via 'put')    

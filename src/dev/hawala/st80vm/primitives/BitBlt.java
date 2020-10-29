@@ -810,13 +810,12 @@ public class BitBlt {
 		OTEntry stops = Memory.ot(stopsPointer);
 		boolean display = (displayPointer == Well.known().TruePointer);
 		
-		OTEntry stopConditions = Memory.ot(currSelf.fetchPointerAt(CharScan_StopConditions));
 		OTEntry xTable = Memory.ot(currSelf.fetchPointerAt(CharScan_XTable));
 		
 		lastIndex(startIndex);
 		while(lastIndex() <= stopIndex) {
 			int ascii = sourceString.fetchByteAt(lastIndex() - 1);
-			if (stopConditions.fetchPointerAt(ascii) != Well.known().NilPointer) {
+			if (stops.fetchPointerAt(ascii) != Well.known().NilPointer) {
 				popStack(); // drop self
 				push(stops.fetchPointerAt(ascii));
 				return success();

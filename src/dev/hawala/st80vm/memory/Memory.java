@@ -341,6 +341,13 @@ public class Memory {
 			int len = loadPage(bis, buffer, 0);
 			if (len < buffer.length) { throw new RuntimeException("Invalid VirtualImage (metadata page too short)"); }
 			
+			// check the image type
+			int imageType = buffer[4];
+			if (imageType < 0 || imageType > 1) {
+				System.out.printf("\n##\n## unsupported image type: %d\n##\n", imageType);
+				System.exit(2);
+			}
+			
 			// interpret and check relevant metadata
 			int lastSegment = buffer[0];
 			int limitInLastPage = buffer[1] & 0xFFFF;

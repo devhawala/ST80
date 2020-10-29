@@ -170,7 +170,7 @@ import dev.hawala.st80vm.Config;
 	
 	private void checkFree() {
 		if (this.freeEntry) {
-			throw new RuntimeException(String.format("Misuse ERROR: using fetch/store on free-ed object 0x%04X", this.objectPointer));
+			throw new RuntimeException(String.format("Misuse ERROR: using fetch/store on free-ed object 0x%04X (linear: 0x%04X)", this.objectPointer, this.linearObjectPointer));
 		}
 	}
 
@@ -309,7 +309,7 @@ import dev.hawala.st80vm.Config;
 			dataInfo = "'" + Memory.getSymbolText(this.objectPointer) + "'";
 		} else if (classPointer == Well.known().ClassStringPointer) {
 			dataInfo = "'" + Memory.getStringValue(this.objectPointer) + "'";
-		} else {
+		} else if (!this.freeEntry && this.address != 0) {
 			for (int i = 0; i < Math.min(16, this.fieldWordsLimit); i++) {
 				dataInfo = String.format("%s %04X", dataInfo, this.fetchWordAt(i));
 			}
