@@ -701,6 +701,9 @@ The following files and documents available in the internet were useful for crea
 
 ### History
 
+- 2021-06-10    
+  Fixed 2 errors in transliteration of Smalltalk-VM-pseudocode from the Bluebook to Java 
+
 - 2020-10-29    
   Added conversion of _type 5_ images (Stretch+LOOM memory model) to _type 1_ images (Stretch memory model)    
   Added vendor-specific primitive dummies for 1186 allowing to run the (converted) Analyst-1.2 image

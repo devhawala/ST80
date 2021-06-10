@@ -508,6 +508,7 @@ public class Interpreter extends InterpreterBase {
 			push(activeContext);
 			push(resultPointer);
 			sendSelector(Well.known().CannotReturnSelector, 1);
+			return;
 		}
 		
 		int sendersIP = Memory.fetchPointer(Well.known().InstructionPointerIndex, contextPointer);
@@ -515,6 +516,7 @@ public class Interpreter extends InterpreterBase {
 			push(activeContext);
 			push(resultPointer);
 			sendSelector(Well.known().CannotReturnSelector, 1);
+			return;
 		}
 		
 		Memory.increaseReferencesTo(resultPointer);
