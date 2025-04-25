@@ -34,6 +34,7 @@ import static dev.hawala.st80vm.interpreter.InterpreterBase.success;
 import static dev.hawala.st80vm.interpreter.InterpreterBase.unPop;
 
 import dev.hawala.st80vm.Config;
+import dev.hawala.st80vm.interpreter.Interpreter;
 import dev.hawala.st80vm.interpreter.Interpreter.Primitive;
 import dev.hawala.st80vm.memory.Memory;
 import dev.hawala.st80vm.memory.Well;
@@ -210,11 +211,17 @@ public class SmallInteger {
 		int receiver = popInteger();
 		if (success(argument != 0)) {
 			int result = receiver / argument;
-			if ((receiver % argument) == 0) {
-				pushInteger(result);
-			} else {
+			if ((receiver % argument) != 0) {
 				int adjust = ( (receiver < 0 && argument > 0) || (receiver > 0 && argument < 0) ) ? 1 : 0;
-				pushInteger(result - adjust);
+				result = result - adjust;
+			}
+			if (success(Memory.isIntegerValue(result))) {
+				pushInteger(result);
+			} else if (result > 0) {
+				push(Interpreter.positive16BitIntegerFor(result));
+				return true;
+			} else {
+				unPop(2);
 			}
 		} else {
 			unPop(2);
@@ -226,7 +233,15 @@ public class SmallInteger {
 		int argument = popInteger();
 		int receiver = popInteger();
 		if (success(argument != 0)) {
-			pushInteger(receiver / argument);
+			int result = receiver / argument;
+			if (success(Memory.isIntegerValue(result))) {
+				pushInteger(result);
+			} else if (result > 0) {
+				push(Interpreter.positive16BitIntegerFor(result));
+				return true;
+			} else {
+				unPop(2);
+			}
 		} else {
 			unPop(2);
 		}

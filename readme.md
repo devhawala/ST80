@@ -701,6 +701,9 @@ The following files and documents available in the internet were useful for crea
 
 ### History
 
+- 2025-04-25    
+  Fix for SmallInteger primitives "primitiveDiv" and "primitiveQuo" (Issue #5)
+
 - 2021-06-10    
   Fixed 2 errors in transliteration of Smalltalk-VM-pseudocode from the Bluebook to Java 
 
